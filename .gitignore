@@ -1,0 +1,12 @@
+#IDEs
+.vscode
+.idea
+
+# General
+.env
+
+# Python
+.venv
+.langgraph_api
+
+__pycache__
