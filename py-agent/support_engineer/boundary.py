@@ -4,6 +4,7 @@ from typing import Any
 from uuid import uuid4
 
 from loguru import logger
+from langchain_core.messages import AIMessage
 from pydantic import BaseModel, Field
 
 from support_engineer.agent import agent
@@ -21,56 +22,22 @@ def _agent_input(message: str) -> dict[str, list[dict[str, str]]]:
     return {"messages": [{"role": "user", "content": message}]}
 
 
-def _message_content(message: Any) -> str:
-    if message is None:
-        return ""
+def _extract_final_message(raw_response: Any) -> str:
+    if not isinstance(raw_response, dict):
+        raise TypeError("Agent response must be a dict.")
 
-    if isinstance(message, str):
-        return message
+    messages = raw_response.get("messages")
+    if not isinstance(messages, list) or not messages:
+        raise ValueError("Agent response must contain a non-empty messages list.")
 
-    if isinstance(message, dict):
-        content = message.get("content")
-    else:
-        content = getattr(message, "content", None)
+    final_message = messages[-1]
+    if not isinstance(final_message, AIMessage):
+        raise TypeError("The last agent message must be an AIMessage.")
 
-    if isinstance(content, str):
-        return content
+    if not isinstance(final_message.content, str):
+        raise TypeError("The final AIMessage content must be a string.")
 
-    if isinstance(content, list):
-        parts = []
-        for item in content:
-            if isinstance(item, str):
-                parts.append(item)
-            elif isinstance(item, dict) and isinstance(item.get("text"), str):
-                parts.append(item["text"])
-            elif isinstance(item, dict) and isinstance(item.get("content"), str):
-                parts.append(item["content"])
-        return "\n".join(parts)
-
-    return str(message)
-
-
-def _extract_message(raw_response: Any) -> str:
-    if isinstance(raw_response, dict):
-        messages = raw_response.get("messages")
-        if messages:
-            return _message_content(messages[-1])
-
-        for key in ("message", "output", "content"):
-            if key in raw_response:
-                return _message_content(raw_response[key])
-
-    return _message_content(raw_response)
-
-
-def _extract_structured(raw_response: Any) -> dict[str, Any]:
-    if isinstance(raw_response, dict) and isinstance(
-        raw_response.get("structured_response"),
-        dict,
-    ):
-        return raw_response["structured_response"]
-
-    return {}
+    return final_message.content
 
 
 def _extract_tool_calls(raw_response: Any) -> list[dict[str, Any]]:
@@ -100,8 +67,8 @@ def _build_response(
     user_id: str,
 ) -> AgentResponse:
     return AgentResponse(
-        message=_extract_message(raw_response),
-        structured=_extract_structured(raw_response),
+        message=_extract_final_message(raw_response),
+        structured={},
         trace={
             "run_id": f"run-python-langchain-{uuid4()}",
             "thread_id": thread_id,
