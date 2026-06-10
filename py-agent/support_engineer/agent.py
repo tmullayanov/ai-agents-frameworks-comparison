@@ -7,6 +7,8 @@ from langchain.agents.middleware import wrap_model_call, ModelRequest, ModelResp
 from typing import Awaitable, Callable
 from langchain.chat_models import init_chat_model
 
+from support_engineer.settings import settings
+
 @tool
 def calculate_factorial(n: int) -> str:
     """Calculates the factorial of a given integer n."""
@@ -41,10 +43,10 @@ class CustomLoggingMiddleware(AgentMiddleware):
 logger.info("creating the model via OpenAI interface")
 
 model = init_chat_model(
-    base_url="http://127.0.0.1:1234/v1",
-    api_key="not-needed",
-    model="qwen/qwen3-4b",
-    model_provider="openai"
+    base_url=settings.llm_base_url,
+    api_key=settings.llm_api_key,
+    model=settings.llm_model,
+    model_provider=settings.llm_model_provider,
 )
 
 agent = create_agent(
