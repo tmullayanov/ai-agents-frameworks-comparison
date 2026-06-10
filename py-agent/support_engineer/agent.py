@@ -3,11 +3,13 @@ from loguru import logger
 
 from langchain.agents import create_agent
 from langchain.tools import tool
-from langchain.agents.middleware import wrap_model_call, ModelRequest, ModelResponse, AgentMiddleware
+from langchain.agents.middleware import ModelRequest, ModelResponse, AgentMiddleware
 from typing import Awaitable, Callable
 from langchain.chat_models import init_chat_model
 
-from support_engineer.settings import settings
+from .settings import settings
+from .prompt import STATIC_SYSTEM_PROMPT
+
 
 @tool
 def calculate_factorial(n: int) -> str:
@@ -53,5 +55,5 @@ agent = create_agent(
     model,
     tools=[calculate_factorial],
     middleware=[CustomLoggingMiddleware()],
-    system_prompt="You are a helpful assistant"
+    system_prompt=STATIC_SYSTEM_PROMPT
 )
