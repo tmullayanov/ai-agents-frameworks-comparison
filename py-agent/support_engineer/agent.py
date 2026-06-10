@@ -6,9 +6,9 @@ from langchain.agents.middleware import ModelRequest, ModelResponse, AgentMiddle
 from typing import Awaitable, Callable
 from langchain.chat_models import init_chat_model
 
-from .settings import settings
-from .prompt import STATIC_SYSTEM_PROMPT
-from .tools import LOCAL_TOOLS
+from support_engineer.settings import settings
+from support_engineer.prompt import STATIC_SYSTEM_PROMPT
+from support_engineer.tools import LOCAL_TOOLS
 
 
 
