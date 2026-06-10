@@ -2,20 +2,13 @@ from loguru import logger
 
 
 from langchain.agents import create_agent
-from langchain.tools import tool
 from langchain.agents.middleware import ModelRequest, ModelResponse, AgentMiddleware
 from typing import Awaitable, Callable
 from langchain.chat_models import init_chat_model
 
 from .settings import settings
 from .prompt import STATIC_SYSTEM_PROMPT
-
-
-@tool
-def calculate_factorial(n: int) -> str:
-    """Calculates the factorial of a given integer n."""
-    import math
-    return f"The factorial of {n} is {math.factorial(n)}"
+from .tools import LOCAL_TOOLS
 
 
 
@@ -53,7 +46,7 @@ model = init_chat_model(
 
 agent = create_agent(
     model,
-    tools=[calculate_factorial],
+    tools=LOCAL_TOOLS,
     middleware=[CustomLoggingMiddleware()],
     system_prompt=STATIC_SYSTEM_PROMPT
 )
