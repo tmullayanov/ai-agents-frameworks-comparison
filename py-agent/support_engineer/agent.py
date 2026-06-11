@@ -5,6 +5,7 @@ from langchain.agents import create_agent
 from langchain.agents.middleware import ModelRequest, ModelResponse, AgentMiddleware
 from typing import Awaitable, Callable
 from langchain.chat_models import init_chat_model
+from langgraph.checkpoint.memory import InMemorySaver
 
 from support_engineer.settings import settings
 from support_engineer.prompt import STATIC_SYSTEM_PROMPT
@@ -37,6 +38,8 @@ class CustomLoggingMiddleware(AgentMiddleware):
 
 logger.info("creating the model via OpenAI interface")
 
+checkpointer = InMemorySaver()
+
 model = init_chat_model(
     base_url=settings.llm_base_url,
     api_key=settings.llm_api_key,
@@ -48,5 +51,6 @@ agent = create_agent(
     model,
     tools=LOCAL_TOOLS,
     middleware=[CustomLoggingMiddleware()],
-    system_prompt=STATIC_SYSTEM_PROMPT
+    system_prompt=STATIC_SYSTEM_PROMPT,
+    checkpointer=checkpointer,
 )

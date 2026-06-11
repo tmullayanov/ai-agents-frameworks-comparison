@@ -53,9 +53,16 @@ def agent_module(monkeypatch):
     sys.modules.pop("support_engineer.boundary", None)
     sys.modules.pop("support_engineer.agent", None)
     module = importlib.import_module("support_engineer.boundary")
+    module.THREAD_STATE_STORE.clear()
+
+    from support_engineer.data.fake_dataset import CREATED_TICKETS
+
+    CREATED_TICKETS.clear()
 
     yield module, created_models
 
+    module.THREAD_STATE_STORE.clear()
+    CREATED_TICKETS.clear()
     sys.modules.pop("support_engineer.boundary", None)
     sys.modules.pop("support_engineer.agent", None)
 
@@ -79,7 +86,9 @@ def test_run_agent_happy_path(agent_module):
     )
     assert response.trace["thread_id"] == "thread-001"
     assert response.trace["user_id"] == "user-001"
-    assert response.trace["final_status"] == "completed"
+    assert response.trace["final_status"] == "plan_proposed"
+    assert response.structured["confirmation_required"] is True
+    assert response.structured["pending_ticket"]["metadata"]["service"] == "billing-api"
     assert response.trace["tool_calls"] == [
         {
             "name": "search_docs",
@@ -88,6 +97,42 @@ def test_run_agent_happy_path(agent_module):
         }
     ]
     assert "search_docs" in created_models[0].bound_tool_names
+
+
+def test_run_agent_confirmation_creates_pending_ticket(agent_module):
+    module, created_models = agent_module
+
+    first_response = module.run_agent(
+        thread_id="thread-confirm-001",
+        user_id="user-001",
+        message=(
+            "После деплоя начал падать billing-api. "
+            "В логах много payment_provider_timeout. "
+            "Посмотри runbook и если нужно заведи incident ticket."
+        ),
+    )
+
+    second_response = module.run_agent(
+        thread_id="thread-confirm-001",
+        user_id="user-001",
+        message="Да, создай ticket. Severity пока SEV-2 candidate.",
+    )
+
+    assert first_response.trace["final_status"] == "plan_proposed"
+    assert second_response.message == (
+        "Created incident ticket INC-FAKE-0001 with severity SEV-2 candidate."
+    )
+    assert second_response.structured["ticket_id"] == "INC-FAKE-0001"
+    assert second_response.structured["pending_ticket"] is None
+    assert second_response.structured["confirmation_required"] is False
+    assert second_response.trace["write_tools"] == [
+        {
+            "name": "create_incident_ticket",
+            "status": "created",
+            "ticket_id": "INC-FAKE-0001",
+        }
+    ]
+    assert len(created_models) == 1
 
 
 def test_run_agent_async_happy_path(agent_module):
@@ -111,7 +156,9 @@ def test_run_agent_async_happy_path(agent_module):
     )
     assert response.trace["thread_id"] == "thread-async-001"
     assert response.trace["user_id"] == "user-async-001"
-    assert response.trace["final_status"] == "completed"
+    assert response.trace["final_status"] == "plan_proposed"
+    assert response.structured["confirmation_required"] is True
+    assert response.structured["pending_ticket"]["metadata"]["service"] == "billing-api"
     assert response.trace["tool_calls"] == [
         {
             "name": "search_docs",
