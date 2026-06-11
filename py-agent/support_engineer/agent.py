@@ -2,7 +2,12 @@ from loguru import logger
 
 
 from langchain.agents import create_agent
-from langchain.agents.middleware import ModelRequest, ModelResponse, AgentMiddleware
+from langchain.agents.middleware import (
+    AgentMiddleware,
+    HumanInTheLoopMiddleware,
+    ModelRequest,
+    ModelResponse,
+)
 from typing import Awaitable, Callable
 from langchain.chat_models import init_chat_model
 from langgraph.checkpoint.memory import InMemorySaver
@@ -50,7 +55,16 @@ model = init_chat_model(
 agent = create_agent(
     model,
     tools=LOCAL_TOOLS,
-    middleware=[CustomLoggingMiddleware()],
+    middleware=[
+        CustomLoggingMiddleware(),
+        HumanInTheLoopMiddleware(
+            interrupt_on={
+                "create_incident_ticket": {
+                    "allowed_decisions": ["approve", "reject"],
+                }
+            }
+        ),
+    ],
     system_prompt=STATIC_SYSTEM_PROMPT,
     checkpointer=checkpointer,
 )
