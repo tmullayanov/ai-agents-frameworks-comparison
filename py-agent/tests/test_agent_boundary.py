@@ -10,10 +10,25 @@ from pydantic import Field
 
 class ToolCallingFakeModel(FakeMessagesListChatModel):
     bound_tool_names: list[str] = Field(default_factory=list)
+    seen_messages: list[list[tuple[str | None, str | None]]] = Field(default_factory=list)
 
     def bind_tools(self, tools, *, tool_choice=None, **kwargs):
         self.bound_tool_names = [tool.name for tool in tools]
         return self
+
+    def _generate(self, messages, stop=None, run_manager=None, **kwargs):
+        self.seen_messages.append(
+            [
+                (getattr(message, "type", None), getattr(message, "content", None))
+                for message in messages
+            ]
+        )
+        return super()._generate(
+            messages,
+            stop=stop,
+            run_manager=run_manager,
+            **kwargs,
+        )
 
 
 def _fake_model(final_message: str) -> ToolCallingFakeModel:
@@ -53,16 +68,9 @@ def agent_module(monkeypatch):
     sys.modules.pop("support_engineer.boundary", None)
     sys.modules.pop("support_engineer.agent", None)
     module = importlib.import_module("support_engineer.boundary")
-    module.THREAD_STATE_STORE.clear()
-
-    from support_engineer.data.fake_dataset import CREATED_TICKETS
-
-    CREATED_TICKETS.clear()
 
     yield module, created_models
 
-    module.THREAD_STATE_STORE.clear()
-    CREATED_TICKETS.clear()
     sys.modules.pop("support_engineer.boundary", None)
     sys.modules.pop("support_engineer.agent", None)
 
@@ -86,9 +94,8 @@ def test_run_agent_happy_path(agent_module):
     )
     assert response.trace["thread_id"] == "thread-001"
     assert response.trace["user_id"] == "user-001"
-    assert response.trace["final_status"] == "plan_proposed"
-    assert response.structured["confirmation_required"] is True
-    assert response.structured["pending_ticket"]["metadata"]["service"] == "billing-api"
+    assert response.trace["final_status"] == "completed"
+    assert response.structured == {}
     assert response.trace["tool_calls"] == [
         {
             "name": "search_docs",
@@ -99,40 +106,85 @@ def test_run_agent_happy_path(agent_module):
     assert "search_docs" in created_models[0].bound_tool_names
 
 
-def test_run_agent_confirmation_creates_pending_ticket(agent_module):
+def test_run_agent_continues_history_for_same_thread(agent_module):
     module, created_models = agent_module
+    model = created_models[0]
+    model.responses = [
+        AIMessage(content="First answer."),
+        AIMessage(content="Second answer."),
+    ]
+    model.i = 0
+    model.seen_messages.clear()
 
     first_response = module.run_agent(
-        thread_id="thread-confirm-001",
+        thread_id="thread-continuation-001",
         user_id="user-001",
-        message=(
-            "После деплоя начал падать billing-api. "
-            "В логах много payment_provider_timeout. "
-            "Посмотри runbook и если нужно заведи incident ticket."
-        ),
+        message="First turn: billing-api is failing.",
     )
-
     second_response = module.run_agent(
-        thread_id="thread-confirm-001",
+        thread_id="thread-continuation-001",
         user_id="user-001",
-        message="Да, создай ticket. Severity пока SEV-2 candidate.",
+        message="Second turn: keep investigating in the same thread.",
     )
 
-    assert first_response.trace["final_status"] == "plan_proposed"
-    assert second_response.message == (
-        "Created incident ticket INC-FAKE-0001 with severity SEV-2 candidate."
-    )
-    assert second_response.structured["ticket_id"] == "INC-FAKE-0001"
-    assert second_response.structured["pending_ticket"] is None
-    assert second_response.structured["confirmation_required"] is False
-    assert second_response.trace["write_tools"] == [
-        {
-            "name": "create_incident_ticket",
-            "status": "created",
-            "ticket_id": "INC-FAKE-0001",
-        }
+    assert first_response.message == "First answer."
+    assert second_response.message == "Second answer."
+    second_turn_first_model_call = model.seen_messages[1]
+    assert ("human", "First turn: billing-api is failing.") in second_turn_first_model_call
+    assert ("ai", "First answer.") in second_turn_first_model_call
+    assert (
+        "human",
+        "Second turn: keep investigating in the same thread.",
+    ) in second_turn_first_model_call
+
+
+def test_run_agent_isolates_history_between_threads(agent_module):
+    module, created_models = agent_module
+    model = created_models[0]
+    model.responses = [
+        AIMessage(content="Thread A first answer."),
+        AIMessage(content="Thread B first answer."),
+        AIMessage(content="Thread A second answer."),
+        AIMessage(content="Thread B second answer."),
     ]
-    assert len(created_models) == 1
+    model.i = 0
+    model.seen_messages.clear()
+
+    module.run_agent(
+        thread_id="thread-a",
+        user_id="user-001",
+        message="Thread A first user message.",
+    )
+    module.run_agent(
+        thread_id="thread-b",
+        user_id="user-001",
+        message="Thread B first user message.",
+    )
+    module.run_agent(
+        thread_id="thread-a",
+        user_id="user-001",
+        message="Thread A second user message.",
+    )
+    module.run_agent(
+        thread_id="thread-b",
+        user_id="user-001",
+        message="Thread B second user message.",
+    )
+
+    thread_a_second_call = model.seen_messages[2]
+    thread_b_second_call = model.seen_messages[3]
+
+    assert ("human", "Thread A first user message.") in thread_a_second_call
+    assert ("ai", "Thread A first answer.") in thread_a_second_call
+    assert ("human", "Thread A second user message.") in thread_a_second_call
+    assert ("human", "Thread B first user message.") not in thread_a_second_call
+    assert ("ai", "Thread B first answer.") not in thread_a_second_call
+
+    assert ("human", "Thread B first user message.") in thread_b_second_call
+    assert ("ai", "Thread B first answer.") in thread_b_second_call
+    assert ("human", "Thread B second user message.") in thread_b_second_call
+    assert ("human", "Thread A first user message.") not in thread_b_second_call
+    assert ("ai", "Thread A first answer.") not in thread_b_second_call
 
 
 def test_run_agent_async_happy_path(agent_module):
@@ -156,9 +208,8 @@ def test_run_agent_async_happy_path(agent_module):
     )
     assert response.trace["thread_id"] == "thread-async-001"
     assert response.trace["user_id"] == "user-async-001"
-    assert response.trace["final_status"] == "plan_proposed"
-    assert response.structured["confirmation_required"] is True
-    assert response.structured["pending_ticket"]["metadata"]["service"] == "billing-api"
+    assert response.trace["final_status"] == "completed"
+    assert response.structured == {}
     assert response.trace["tool_calls"] == [
         {
             "name": "search_docs",
