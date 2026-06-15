@@ -8,6 +8,14 @@ from langchain_core.messages import AIMessage
 from pydantic import Field, ValidationError
 
 
+def _clear_support_engineer_modules():
+    for module_name in list(sys.modules):
+        if module_name == "support_engineer.agent" or module_name.startswith(
+            "support_engineer.boundary"
+        ):
+            sys.modules.pop(module_name, None)
+
+
 class ToolCallingFakeModel(FakeMessagesListChatModel):
     bound_tool_names: list[str] = Field(default_factory=list)
     seen_messages: list[list[tuple[str | None, str | None]]] = Field(default_factory=list)
@@ -91,21 +99,19 @@ def agent_module(monkeypatch):
 
     monkeypatch.setattr("langchain.chat_models.init_chat_model", fake_init_chat_model)
 
-    sys.modules.pop("support_engineer.boundary", None)
-    sys.modules.pop("support_engineer.agent", None)
+    _clear_support_engineer_modules()
     module = importlib.import_module("support_engineer.boundary")
 
     from support_engineer.data.fake_dataset import CREATED_TICKETS
 
     CREATED_TICKETS.clear()
-    module._PENDING_CONFIRMATIONS.clear()
+    module.clear_pending_confirmations()
 
     yield module, created_models, CREATED_TICKETS
 
     CREATED_TICKETS.clear()
-    module._PENDING_CONFIRMATIONS.clear()
-    sys.modules.pop("support_engineer.boundary", None)
-    sys.modules.pop("support_engineer.agent", None)
+    module.clear_pending_confirmations()
+    _clear_support_engineer_modules()
 
 
 def _message_request(module, thread_id: str, message: str):
@@ -148,17 +154,18 @@ def test_run_agent_happy_path(agent_module):
         "Diagnostic plan prepared from billing-api runbook. "
         "Confirmation required before ticket creation."
     )
-    assert response.trace["thread_id"] == "thread-001"
-    assert response.trace["user_id"] == "user-001"
-    assert response.trace["final_status"] == "completed"
-    assert response.trace["confirmation_required"] is False
-    assert response.structured == {}
-    assert response.trace["tool_calls"] == [
-        {
-            "name": "search_docs",
-            "status": "success",
-            "tool_call_id": "call-search-docs",
-        }
+    assert response.trace.thread_id == "thread-001"
+    assert response.trace.user_id == "user-001"
+    assert response.trace.final_status == "completed"
+    assert response.trace.confirmation_required is False
+    assert response.structured.diagnostic_summary is None
+    assert response.structured.proposed_ticket is None
+    assert response.trace.tool_calls == [
+        module.ToolCallTrace(
+            name="search_docs",
+            status="success",
+            tool_call_id="call-search-docs",
+        )
     ]
     assert "search_docs" in created_models[0].bound_tool_names
 
@@ -258,8 +265,21 @@ def test_ticket_creation_requires_confirmation(agent_module):
     assert response.pending_confirmation.action_name == "create_incident_ticket"
     assert response.pending_confirmation.action_args["severity"] == "SEV-2"
     assert response.pending_confirmation.allowed_decisions == ["approve", "reject"]
-    assert response.trace["confirmation_required"] is True
-    assert response.trace["approval_request"]["action_name"] == "create_incident_ticket"
+    assert response.trace.confirmation_required is True
+    assert (
+        response.trace.pending_confirmation_id
+        == response.pending_confirmation.confirmation_id
+    )
+    assert response.structured.diagnostic_summary is None
+    assert isinstance(response.structured.proposed_ticket, module.IncidentTicketPayload)
+    assert response.structured.proposed_ticket.title == (
+        "billing-api payment provider timeouts"
+    )
+    assert response.structured.proposed_ticket.severity == "SEV-2"
+    assert response.structured.proposed_ticket.description == (
+        "billing-api started failing after deploy with payment_provider_timeout."
+    )
+    assert response.structured.proposed_ticket.metadata == {"service": "billing-api"}
     assert created_tickets == []
 
 
@@ -284,13 +304,13 @@ def test_approve_confirmation_executes_ticket_tool(agent_module):
     assert second_response.status == "completed"
     assert second_response.message == "Created INC-FAKE-0001."
     assert second_response.pending_confirmation is None
-    assert second_response.trace["confirmation_required"] is False
-    assert second_response.trace["tool_calls"] == [
-        {
-            "name": "create_incident_ticket",
-            "status": "success",
-            "tool_call_id": "call-create-ticket",
-        }
+    assert second_response.trace.confirmation_required is False
+    assert second_response.trace.tool_calls == [
+        module.ToolCallTrace(
+            name="create_incident_ticket",
+            status="success",
+            tool_call_id="call-create-ticket",
+        )
     ]
     assert len(created_tickets) == 1
     assert created_tickets[0]["id"] == "INC-FAKE-0001"
@@ -316,12 +336,12 @@ def test_reject_confirmation_does_not_execute_ticket_tool(agent_module):
 
     assert second_response.status == "rejected"
     assert second_response.message == "Ticket creation rejected."
-    assert second_response.trace["tool_calls"] == [
-        {
-            "name": "create_incident_ticket",
-            "status": "error",
-            "tool_call_id": "call-create-ticket",
-        }
+    assert second_response.trace.tool_calls == [
+        module.ToolCallTrace(
+            name="create_incident_ticket",
+            status="error",
+            tool_call_id="call-create-ticket",
+        )
     ]
     assert created_tickets == []
 
@@ -431,16 +451,17 @@ def test_run_agent_async_happy_path(agent_module):
         "Diagnostic plan prepared from billing-api runbook. "
         "Confirmation required before ticket creation."
     )
-    assert response.trace["thread_id"] == "thread-async-001"
-    assert response.trace["user_id"] == "user-001"
-    assert response.trace["final_status"] == "completed"
-    assert response.structured == {}
-    assert response.trace["tool_calls"] == [
-        {
-            "name": "search_docs",
-            "status": "success",
-            "tool_call_id": "call-search-docs",
-        }
+    assert response.trace.thread_id == "thread-async-001"
+    assert response.trace.user_id == "user-001"
+    assert response.trace.final_status == "completed"
+    assert response.structured.diagnostic_summary is None
+    assert response.structured.proposed_ticket is None
+    assert response.trace.tool_calls == [
+        module.ToolCallTrace(
+            name="search_docs",
+            status="success",
+            tool_call_id="call-search-docs",
+        )
     ]
     assert "search_docs" in created_models[0].bound_tool_names
 
@@ -470,5 +491,5 @@ def test_run_agent_async_approve_confirmation(agent_module):
     response = asyncio.run(run_flow())
 
     assert response.status == "completed"
-    assert response.trace["tool_calls"][0]["name"] == "create_incident_ticket"
+    assert response.trace.tool_calls[0].name == "create_incident_ticket"
     assert len(created_tickets) == 1
