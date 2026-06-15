@@ -38,3 +38,15 @@ Expected structured output fields:
 - proposed_ticket
 - memory_candidates
 '''
+
+
+DIAGNOSTIC_SUMMARY_PROMPT = '''
+Extract a compact DiagnosticSummary from the completed support triage turn.
+
+Use only the supplied conversation and final assistant answer.
+Keep the output conservative:
+- service: the affected service if it is clearly named, otherwise null.
+- symptoms: short observable symptoms, not remediation steps.
+- severity_guess: a severity label if the assistant clearly implies one, otherwise null.
+- requires_confirmation: true only if the final answer asks for human approval or confirmation.
+'''

@@ -5,6 +5,7 @@ import sys
 import pytest
 from langchain_core.language_models.fake_chat_models import FakeMessagesListChatModel
 from langchain_core.messages import AIMessage
+from langchain_core.runnables import RunnableLambda
 from pydantic import Field, ValidationError
 
 
@@ -19,10 +20,26 @@ def _clear_support_engineer_modules():
 class ToolCallingFakeModel(FakeMessagesListChatModel):
     bound_tool_names: list[str] = Field(default_factory=list)
     seen_messages: list[list[tuple[str | None, str | None]]] = Field(default_factory=list)
+    structured_output_calls: int = 0
+    structured_output_error: Exception | None = None
 
     def bind_tools(self, tools, *, tool_choice=None, **kwargs):
         self.bound_tool_names = [tool.name for tool in tools]
         return self
+
+    def with_structured_output(self, schema, *, include_raw=False, **kwargs):
+        def invoke_structured_output(messages, config=None):
+            self.structured_output_calls += 1
+            if self.structured_output_error is not None:
+                raise self.structured_output_error
+            return schema(
+                service="billing-api",
+                symptoms=["payment_provider_timeout"],
+                severity_guess="SEV-2",
+                requires_confirmation=True,
+            )
+
+        return RunnableLambda(invoke_structured_output)
 
     def _generate(self, messages, stop=None, run_manager=None, **kwargs):
         self.seen_messages.append(
@@ -158,8 +175,14 @@ def test_run_agent_happy_path(agent_module):
     assert response.trace.user_id == "user-001"
     assert response.trace.final_status == "completed"
     assert response.trace.confirmation_required is False
-    assert response.structured.diagnostic_summary is None
+    assert response.structured.diagnostic_summary == module.DiagnosticSummary(
+        service="billing-api",
+        symptoms=["payment_provider_timeout"],
+        severity_guess="SEV-2",
+        requires_confirmation=True,
+    )
     assert response.structured.proposed_ticket is None
+    assert created_models[0].structured_output_calls == 1
     assert response.trace.tool_calls == [
         module.ToolCallTrace(
             name="search_docs",
@@ -304,6 +327,12 @@ def test_approve_confirmation_executes_ticket_tool(agent_module):
     assert second_response.status == "completed"
     assert second_response.message == "Created INC-FAKE-0001."
     assert second_response.pending_confirmation is None
+    assert second_response.structured.diagnostic_summary == module.DiagnosticSummary(
+        service="billing-api",
+        symptoms=["payment_provider_timeout"],
+        severity_guess="SEV-2",
+        requires_confirmation=True,
+    )
     assert second_response.trace.confirmation_required is False
     assert second_response.trace.tool_calls == [
         module.ToolCallTrace(
@@ -454,7 +483,12 @@ def test_run_agent_async_happy_path(agent_module):
     assert response.trace.thread_id == "thread-async-001"
     assert response.trace.user_id == "user-001"
     assert response.trace.final_status == "completed"
-    assert response.structured.diagnostic_summary is None
+    assert response.structured.diagnostic_summary == module.DiagnosticSummary(
+        service="billing-api",
+        symptoms=["payment_provider_timeout"],
+        severity_guess="SEV-2",
+        requires_confirmation=True,
+    )
     assert response.structured.proposed_ticket is None
     assert response.trace.tool_calls == [
         module.ToolCallTrace(
@@ -492,4 +526,27 @@ def test_run_agent_async_approve_confirmation(agent_module):
 
     assert response.status == "completed"
     assert response.trace.tool_calls[0].name == "create_incident_ticket"
+    assert response.structured.diagnostic_summary == module.DiagnosticSummary(
+        service="billing-api",
+        symptoms=["payment_provider_timeout"],
+        severity_guess="SEV-2",
+        requires_confirmation=True,
+    )
     assert len(created_tickets) == 1
+
+
+def test_diagnostic_summary_falls_back_to_none(agent_module):
+    module, created_models, _ = agent_module
+    created_models[0].structured_output_error = ValueError("invalid structured output")
+
+    response = module.run_agent(
+        _message_request(
+            module,
+            "thread-summary-fallback-001",
+            "billing-api started failing with payment_provider_timeout.",
+        )
+    )
+
+    assert response.status == "completed"
+    assert response.structured.diagnostic_summary is None
+    assert created_models[0].structured_output_calls == 1

@@ -9,6 +9,7 @@ from support_engineer.boundary.models import (
     AgentRequest,
     AgentResponse,
     AgentStructuredOutput,
+    DiagnosticSummary,
     ExecutionTrace,
     IncidentTicketPayload,
     PendingConfirmation,
@@ -77,8 +78,15 @@ def _build_trace(
 
 
 def _build_structured_output(
+    raw_response: Any | None = None,
     pending_confirmation: PendingConfirmation | None = None,
 ) -> AgentStructuredOutput:
+    diagnostic_summary = None
+    if isinstance(raw_response, dict):
+        raw_summary = raw_response.get("diagnostic_summary")
+        if raw_summary is not None:
+            diagnostic_summary = DiagnosticSummary.model_validate(raw_summary)
+
     proposed_ticket = None
     if (
         pending_confirmation is not None
@@ -89,7 +97,7 @@ def _build_structured_output(
         )
 
     return AgentStructuredOutput(
-        diagnostic_summary=None,
+        diagnostic_summary=diagnostic_summary,
         proposed_ticket=proposed_ticket,
     )
 
@@ -104,7 +112,7 @@ def build_completed_response(
         message=_extract_final_message(raw_response),
         status=status,
         pending_confirmation=None,
-        structured=_build_structured_output(),
+        structured=_build_structured_output(raw_response=raw_response),
         trace=_build_trace(
             thread_id=request.thread_id,
             user_id=request.user_id,
@@ -141,7 +149,10 @@ def build_confirmation_response(
         ),
         status="confirmation_required",
         pending_confirmation=pending_confirmation,
-        structured=_build_structured_output(pending_confirmation),
+        structured=_build_structured_output(
+            raw_response=raw_response,
+            pending_confirmation=pending_confirmation,
+        ),
         trace=_build_trace(
             thread_id=request.thread_id,
             user_id=request.user_id,
