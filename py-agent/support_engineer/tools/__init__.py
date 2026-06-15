@@ -21,17 +21,6 @@ LOCAL_TOOLS = [
 ]
 
 
-def get_tools():
-    if settings.use_local_tools:
-        return LOCAL_TOOLS
-
-    from .server import load_mcp_tools
-
-    if settings.mcp_server is None:
-        raise ValueError("MCP_SERVER is required when USE_LOCAL_TOOLS=false")
-    return load_mcp_tools(settings.mcp_server)
-
-
 async def get_tools_async():
     if settings.use_local_tools:
         return LOCAL_TOOLS

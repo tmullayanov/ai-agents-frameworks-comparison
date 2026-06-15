@@ -1,4 +1,5 @@
-from typing import Awaitable, Callable, Literal, NotRequired
+import asyncio
+from typing import Any, Awaitable, Callable, Literal, NotRequired
 
 from langchain.agents import create_agent
 from langchain.agents.middleware import (
@@ -18,7 +19,7 @@ from loguru import logger
 from support_engineer.boundary.models import DiagnosticSummary
 from support_engineer.prompt import DIAGNOSTIC_SUMMARY_PROMPT, STATIC_SYSTEM_PROMPT
 from support_engineer.settings import settings
-from support_engineer.tools import get_tools
+from support_engineer.tools import get_tools_async
 
 
 class SupportWorkflowState(AgentState):
@@ -48,34 +49,8 @@ class CustomLoggingMiddleware(AgentMiddleware):
         return outputs
 
 
-logger.info("creating the model via OpenAI interface")
-
-checkpointer = InMemorySaver()
-
-model = init_chat_model(
-    base_url=settings.llm_base_url,
-    api_key=settings.llm_api_key,
-    model=settings.llm_model,
-    model_provider=settings.llm_model_provider,
-)
-
-triage_agent = create_agent(
-    model,
-    tools=get_tools(),
-    middleware=[
-        CustomLoggingMiddleware(),
-        HumanInTheLoopMiddleware(
-            interrupt_on={
-                "create_incident_ticket": {
-                    "allowed_decisions": ["approve", "reject"],
-                }
-            }
-        ),
-    ],
-    system_prompt=STATIC_SYSTEM_PROMPT,
-)
-
-diagnostic_summary_runnable = model.with_structured_output(DiagnosticSummary)
+_agent: Any | None = None
+_agent_build_lock: asyncio.Lock | None = None
 
 
 def _final_assistant_text(state: SupportWorkflowState) -> str | None:
@@ -108,59 +83,102 @@ def _diagnostic_summary_input(state: SupportWorkflowState) -> list:
     ]
 
 
-def diagnostic_summary_node(
-    state: SupportWorkflowState,
-    config: RunnableConfig | None = None,
-) -> dict[str, DiagnosticSummary | None]:
-    try:
-        return {
-            "diagnostic_summary": diagnostic_summary_runnable.invoke(
-                _diagnostic_summary_input(state),
-                config=config,
-            )
-        }
-    except Exception as exc:
-        logger.warning("DiagnosticSummary extraction failed: {}", exc)
-        return {"diagnostic_summary": None}
-
-
-async def diagnostic_summary_node_async(
-    state: SupportWorkflowState,
-    config: RunnableConfig | None = None,
-) -> dict[str, DiagnosticSummary | None]:
-    try:
-        return {
-            "diagnostic_summary": await diagnostic_summary_runnable.ainvoke(
-                _diagnostic_summary_input(state),
-                config=config,
-            )
-        }
-    except Exception as exc:
-        logger.warning("DiagnosticSummary extraction failed: {}", exc)
-        return {"diagnostic_summary": None}
-
-
 def _after_triage(state: SupportWorkflowState) -> Literal["summarize", "__end__"]:
     if "__interrupt__" in state:
         return END
     return "summarize"
 
 
-workflow = StateGraph(SupportWorkflowState)
-workflow.add_node("triage", triage_agent)
-workflow.add_node(
-    "summarize",
-    RunnableLambda(diagnostic_summary_node, afunc=diagnostic_summary_node_async),
-)
-workflow.add_edge(START, "triage")
-workflow.add_conditional_edges(
-    "triage",
-    _after_triage,
-    {
-        "summarize": "summarize",
-        END: END,
-    },
-)
-workflow.add_edge("summarize", END)
+async def _build_agent() -> Any:
+    logger.info("creating the model via OpenAI interface")
 
-agent = workflow.compile(checkpointer=checkpointer)
+    model = init_chat_model(
+        base_url=settings.llm_base_url,
+        api_key=settings.llm_api_key,
+        model=settings.llm_model,
+        model_provider=settings.llm_model_provider,
+    )
+    tools = await get_tools_async()
+
+    triage_agent = create_agent(
+        model,
+        tools=tools,
+        middleware=[
+            CustomLoggingMiddleware(),
+            HumanInTheLoopMiddleware(
+                interrupt_on={
+                    "create_incident_ticket": {
+                        "allowed_decisions": ["approve", "reject"],
+                    }
+                }
+            ),
+        ],
+        system_prompt=STATIC_SYSTEM_PROMPT,
+    )
+
+    diagnostic_summary_runnable = model.with_structured_output(DiagnosticSummary)
+
+    def diagnostic_summary_node(
+        state: SupportWorkflowState,
+        config: RunnableConfig | None = None,
+    ) -> dict[str, DiagnosticSummary | None]:
+        try:
+            return {
+                "diagnostic_summary": diagnostic_summary_runnable.invoke(
+                    _diagnostic_summary_input(state),
+                    config=config,
+                )
+            }
+        except Exception as exc:
+            logger.warning("DiagnosticSummary extraction failed: {}", exc)
+            return {"diagnostic_summary": None}
+
+    async def diagnostic_summary_node_async(
+        state: SupportWorkflowState,
+        config: RunnableConfig | None = None,
+    ) -> dict[str, DiagnosticSummary | None]:
+        try:
+            return {
+                "diagnostic_summary": await diagnostic_summary_runnable.ainvoke(
+                    _diagnostic_summary_input(state),
+                    config=config,
+                )
+            }
+        except Exception as exc:
+            logger.warning("DiagnosticSummary extraction failed: {}", exc)
+            return {"diagnostic_summary": None}
+
+    workflow = StateGraph(SupportWorkflowState)
+    workflow.add_node("triage", triage_agent)
+    workflow.add_node(
+        "summarize",
+        RunnableLambda(diagnostic_summary_node, afunc=diagnostic_summary_node_async),
+    )
+    workflow.add_edge(START, "triage")
+    workflow.add_conditional_edges(
+        "triage",
+        _after_triage,
+        {
+            "summarize": "summarize",
+            END: END,
+        },
+    )
+    workflow.add_edge("summarize", END)
+
+    return workflow.compile(checkpointer=InMemorySaver())
+
+
+async def get_agent_async() -> Any:
+    """Return the lazily built async-first support workflow."""
+    global _agent, _agent_build_lock
+
+    if _agent is not None:
+        return _agent
+
+    if _agent_build_lock is None:
+        _agent_build_lock = asyncio.Lock()
+
+    async with _agent_build_lock:
+        if _agent is None:
+            _agent = await _build_agent()
+        return _agent

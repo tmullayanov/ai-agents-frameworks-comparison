@@ -123,6 +123,7 @@ def agent_module(monkeypatch):
 
     _clear_support_engineer_modules()
     module = importlib.import_module("support_engineer.boundary")
+    asyncio.run(importlib.import_module("support_engineer.agent").get_agent_async())
 
     from support_engineer.data.fake_dataset import CREATED_TICKETS
 
@@ -153,6 +154,25 @@ def _decision_request(module, thread_id: str, confirmation_id: str, decision_typ
             type=decision_type,
         ),
     )
+
+
+def test_boundary_import_does_not_build_agent(monkeypatch):
+    created_models = []
+    monkeypatch.setenv("USE_LOCAL_TOOLS", "true")
+
+    def fake_init_chat_model(**kwargs):
+        model = _read_tool_model("This model should be created lazily.")
+        created_models.append(model)
+        return model
+
+    monkeypatch.setattr("langchain.chat_models.init_chat_model", fake_init_chat_model)
+
+    _clear_support_engineer_modules()
+    importlib.import_module("support_engineer.boundary")
+
+    assert created_models == []
+
+    _clear_support_engineer_modules()
 
 
 def test_run_agent_happy_path(agent_module):
@@ -503,6 +523,22 @@ def test_run_agent_async_happy_path(agent_module):
         )
     ]
     assert "search_docs" in created_models[0].bound_tool_names
+
+
+def test_run_agent_rejects_running_event_loop(agent_module):
+    module, _, _ = agent_module
+
+    async def call_sync_boundary():
+        with pytest.raises(RuntimeError, match="use await run_agent_async"):
+            module.run_agent(
+                _message_request(
+                    module,
+                    "thread-running-loop-001",
+                    "This sync call is running inside an event loop.",
+                )
+            )
+
+    asyncio.run(call_sync_boundary())
 
 
 def test_run_agent_async_approve_confirmation(agent_module):

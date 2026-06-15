@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import os
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -8,11 +7,6 @@ from urllib.parse import urlparse
 
 from langchain_core.tools import BaseTool
 from langchain_mcp_adapters.client import MultiServerMCPClient
-
-
-def load_mcp_tools(server_url: str) -> list[BaseTool]:
-    """Compatibility bridge for sync agent construction."""
-    return asyncio.run(load_mcp_tools_async(server_url))
 
 
 async def load_mcp_tools_async(server_url: str) -> list[BaseTool]:
