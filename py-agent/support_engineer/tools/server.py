@@ -2,85 +2,30 @@ from __future__ import annotations
 
 import asyncio
 import os
-from contextlib import contextmanager
 from collections.abc import Iterator
-from typing import Any
+from contextlib import contextmanager
 from urllib.parse import urlparse
 
-from fastmcp import Client
-from langchain_core.tools import StructuredTool, ToolException
+from langchain_core.tools import BaseTool
+from langchain_mcp_adapters.client import MultiServerMCPClient
 
 
-def load_mcp_tools(server_url: str) -> list[StructuredTool]:
-    """Load remote MCP tools and expose them as LangChain tools."""
-    return asyncio.run(_load_mcp_tools(server_url))
+def load_mcp_tools(server_url: str) -> list[BaseTool]:
+    """Compatibility bridge for sync agent construction."""
+    return asyncio.run(load_mcp_tools_async(server_url))
 
 
-async def _load_mcp_tools(server_url: str) -> list[StructuredTool]:
+async def load_mcp_tools_async(server_url: str) -> list[BaseTool]:
     with _without_local_proxy(server_url):
-        async with Client(server_url) as client:
-            mcp_tools = await client.list_tools()
-
-    return [_to_langchain_tool(server_url, tool) for tool in mcp_tools]
-
-
-def _to_langchain_tool(server_url: str, tool: Any) -> StructuredTool:
-    name = tool.name
-    description = tool.description or f"Remote MCP tool {name}."
-    args_schema = tool.inputSchema
-
-    async def call_remote_tool(**kwargs: Any) -> Any:
-        with _without_local_proxy(server_url):
-            async with Client(server_url) as client:
-                result = await client.call_tool(name, kwargs)
-        return _parse_call_tool_result(result)
-
-    def call_remote_tool_sync(**kwargs: Any) -> Any:
-        return asyncio.run(call_remote_tool(**kwargs))
-
-    return StructuredTool(
-        name=name,
-        description=description,
-        args_schema=args_schema,
-        func=call_remote_tool_sync,
-        coroutine=call_remote_tool,
-    )
-
-
-def _parse_call_tool_result(result: Any) -> Any:
-    if getattr(result, "isError", False):
-        raise ToolException(_content_to_text(result.content))
-
-    structured_content = getattr(result, "structuredContent", None)
-    if structured_content is not None:
-        return structured_content
-
-    content = getattr(result, "content", None)
-    if content is None:
-        return result
-
-    if len(content) == 1 and getattr(content[0], "type", None) == "text":
-        return content[0].text
-
-    return [
-        item.model_dump(by_alias=True) if hasattr(item, "model_dump") else item
-        for item in content
-    ]
-
-
-def _content_to_text(content: Any) -> str:
-    if not content:
-        return "Remote MCP tool failed."
-
-    parts = []
-    for item in content:
-        if getattr(item, "type", None) == "text":
-            parts.append(item.text)
-        elif hasattr(item, "model_dump"):
-            parts.append(str(item.model_dump(by_alias=True)))
-        else:
-            parts.append(str(item))
-    return "\n".join(parts)
+        client = MultiServerMCPClient(
+            {
+                "support": {
+                    "url": server_url,
+                    "transport": "streamable_http",
+                }
+            }
+        )
+        return await client.get_tools()
 
 
 @contextmanager
@@ -109,5 +54,3 @@ def _without_local_proxy(server_url: str) -> Iterator[None]:
                 os.environ.pop(name, None)
             else:
                 os.environ[name] = value
-
-
