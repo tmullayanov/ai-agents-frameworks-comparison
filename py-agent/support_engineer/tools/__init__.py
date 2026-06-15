@@ -1,5 +1,8 @@
 """Tool adapter for the Support Triage Agent."""
 
+import asyncio
+import importlib
+
 from support_engineer.settings import settings
 
 from .local import (
@@ -25,8 +28,11 @@ async def get_tools_async():
     if settings.use_local_tools:
         return LOCAL_TOOLS
 
-    from .server import load_mcp_tools_async
-
     if settings.mcp_server is None:
         raise ValueError("MCP_SERVER is required when USE_LOCAL_TOOLS=false")
+    server_module = await asyncio.to_thread(
+        importlib.import_module,
+        "support_engineer.tools.server",
+    )
+    load_mcp_tools_async = server_module.load_mcp_tools_async
     return await load_mcp_tools_async(settings.mcp_server)

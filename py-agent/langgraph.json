@@ -3,7 +3,7 @@
         "."
     ],
     "graphs": {
-        "support": "support_engineer/agent.py:agent"
+        "support": "support_engineer/agent.py:get_agent_async"
     },
     "env": ".env"
 }
