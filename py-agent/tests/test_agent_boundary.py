@@ -11,8 +11,12 @@ from pydantic import Field, ValidationError
 
 def _clear_support_engineer_modules():
     for module_name in list(sys.modules):
-        if module_name == "support_engineer.agent" or module_name.startswith(
-            "support_engineer.boundary"
+        if (
+            module_name == "support_engineer.agent"
+            or module_name == "support_engineer.settings"
+            or module_name == "support_engineer.tools"
+            or module_name.startswith("support_engineer.boundary")
+            or module_name.startswith("support_engineer.tools.")
         ):
             sys.modules.pop(module_name, None)
 
@@ -105,6 +109,7 @@ def _ticket_tool_model(final_message: str) -> ToolCallingFakeModel:
 @pytest.fixture()
 def agent_module(monkeypatch):
     created_models = []
+    monkeypatch.setenv("USE_LOCAL_TOOLS", "true")
 
     def fake_init_chat_model(**kwargs):
         model = _read_tool_model(
