@@ -18,7 +18,7 @@ from loguru import logger
 from support_engineer.boundary.models import DiagnosticSummary
 from support_engineer.prompt import DIAGNOSTIC_SUMMARY_PROMPT, STATIC_SYSTEM_PROMPT
 from support_engineer.settings import settings
-from support_engineer.tools import LOCAL_TOOLS
+from support_engineer.tools import get_tools
 
 
 class SupportWorkflowState(AgentState):
@@ -61,7 +61,7 @@ model = init_chat_model(
 
 triage_agent = create_agent(
     model,
-    tools=LOCAL_TOOLS,
+    tools=get_tools(),
     middleware=[
         CustomLoggingMiddleware(),
         HumanInTheLoopMiddleware(

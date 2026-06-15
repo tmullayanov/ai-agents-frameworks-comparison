@@ -1,4 +1,6 @@
-"""Local tool implementations for the Support Triage Agent."""
+"""Tool adapter for the Support Triage Agent."""
+
+from support_engineer.settings import settings
 
 from .local import (
     create_incident_ticket,
@@ -18,3 +20,13 @@ LOCAL_TOOLS = [
     save_memory,
 ]
 
+
+def get_tools():
+    if settings.use_local_tools:
+        return LOCAL_TOOLS
+
+    from .server import load_mcp_tools
+
+    if settings.mcp_server is None:
+        raise ValueError("MCP_SERVER is required when USE_LOCAL_TOOLS=false")
+    return load_mcp_tools(settings.mcp_server)
