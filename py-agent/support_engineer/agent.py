@@ -1,5 +1,5 @@
 import asyncio
-from typing import Any, Awaitable, Callable, Literal, NotRequired
+from typing import Any, Awaitable, Callable, Literal, NotRequired, cast
 
 from langchain.agents import create_agent
 from langchain.agents.middleware import (
@@ -123,11 +123,12 @@ async def _build_agent() -> Any:
         config: RunnableConfig | None = None,
     ) -> dict[str, DiagnosticSummary | None]:
         try:
-            return {
-                "diagnostic_summary": diagnostic_summary_runnable.invoke(
+            diagnostic_summary = diagnostic_summary_runnable.invoke(
                     _diagnostic_summary_input(state),
                     config=config,
                 )
+            return {
+                "diagnostic_summary": cast(DiagnosticSummary, diagnostic_summary )
             }
         except Exception as exc:
             logger.warning("DiagnosticSummary extraction failed: {}", exc)
@@ -138,11 +139,12 @@ async def _build_agent() -> Any:
         config: RunnableConfig | None = None,
     ) -> dict[str, DiagnosticSummary | None]:
         try:
-            return {
-                "diagnostic_summary": await diagnostic_summary_runnable.ainvoke(
+            diagnostic_summary = await diagnostic_summary_runnable.ainvoke(
                     _diagnostic_summary_input(state),
                     config=config,
                 )
+            return {
+                "diagnostic_summary": cast(DiagnosticSummary, diagnostic_summary)
             }
         except Exception as exc:
             logger.warning("DiagnosticSummary extraction failed: {}", exc)
