@@ -31,7 +31,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 class AgentControllerLlmE2eTests {
 
     private static final Map<String, String> ENV_FILE = readEnvFile();
-    private static final String LLM_BASE_URL = ENV_FILE.getOrDefault("LLM_BASE_URL", "http://127.0.0.1:1234/v1");
+    private static final String LLM_BASE_URL = envOrFile("LLM_BASE_URL", "http://127.0.0.1:1234/v1");
 
     @Autowired
     private MockMvc mockMvc;
@@ -39,8 +39,8 @@ class AgentControllerLlmE2eTests {
     @DynamicPropertySource
     static void registerLlmProperties(DynamicPropertyRegistry registry) {
         registry.add("spring.ai.openai.base-url", () -> LLM_BASE_URL);
-        registry.add("spring.ai.openai.api-key", () -> ENV_FILE.getOrDefault("LLM_API_KEY", "not-needed"));
-        registry.add("spring.ai.openai.chat.options.model", () -> ENV_FILE.getOrDefault("LLM_MODEL", "qwen/qwen3.5-9b"));
+        registry.add("spring.ai.openai.api-key", () -> envOrFile("LLM_API_KEY", "not-needed"));
+        registry.add("spring.ai.openai.chat.options.model", () -> envOrFile("LLM_MODEL", "qwen/qwen3.5-9b"));
     }
 
     @Test
@@ -60,7 +60,7 @@ class AgentControllerLlmE2eTests {
     }
 
     private static Map<String, String> readEnvFile() {
-        Path envPath = Path.of("..", "py-agent", ".env");
+        Path envPath = Path.of(".env");
         if (!Files.exists(envPath)) {
             return Map.of();
         }
@@ -75,6 +75,14 @@ class AgentControllerLlmE2eTests {
         } catch (IOException exception) {
             return Map.of();
         }
+    }
+
+    private static String envOrFile(String name, String fallback) {
+        String value = System.getenv(name);
+        if (value != null && !value.isBlank()) {
+            return value;
+        }
+        return ENV_FILE.getOrDefault(name, fallback);
     }
 
     private static boolean isReachable(URI uri, Duration timeout) {
