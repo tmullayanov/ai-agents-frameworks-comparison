@@ -1,13 +1,18 @@
 package com.example.javaagent.boundary;
 
+import com.example.javaagent.agent.LlmClient;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.http.MediaType;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 
 import static org.hamcrest.Matchers.startsWith;
+import static org.mockito.BDDMockito.given;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -19,8 +24,14 @@ class AgentControllerTests {
     @Autowired
     private MockMvc mockMvc;
 
+    @MockitoBean
+    private LlmClient llmClient;
+
     @Test
     void acceptsMessageTurn() throws Exception {
+        given(llmClient.send("Billing API is failing after deploy."))
+                .willReturn("Use docs, incidents, and memory to diagnose billing-api.");
+
         mockMvc.perform(post("/api/agent/turns")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
@@ -33,6 +44,7 @@ class AgentControllerTests {
                                 }
                                 """))
                 .andExpect(status().isOk())
+                .andExpect(jsonPath("$.message").value("Use docs, incidents, and memory to diagnose billing-api."))
                 .andExpect(jsonPath("$.status").value("completed"))
                 .andExpect(jsonPath("$.pending_confirmation").doesNotExist())
                 .andExpect(jsonPath("$.structured.diagnostic_summary").doesNotExist())
@@ -41,6 +53,8 @@ class AgentControllerTests {
                 .andExpect(jsonPath("$.trace.thread_id").value("thread-001"))
                 .andExpect(jsonPath("$.trace.user_id").value("user-001"))
                 .andExpect(jsonPath("$.trace.final_status").value("completed"));
+
+        verify(llmClient).send("Billing API is failing after deploy.");
     }
 
     @Test
@@ -63,6 +77,8 @@ class AgentControllerTests {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value("completed"))
                 .andExpect(jsonPath("$.trace.final_status").value("completed"));
+
+        verifyNoInteractions(llmClient);
     }
 
     @Test

@@ -13,12 +13,21 @@ import java.util.UUID;
 @Service
 public class SupportAgentService {
 
+    private final LlmClient llmClient;
+
+    public SupportAgentService(LlmClient llmClient) {
+        this.llmClient = llmClient;
+    }
+
     public AgentResponse run(AgentRequest request) {
         ResponseStatus status = request.decision() == null
                 ? ResponseStatus.COMPLETED
                 : decisionStatus(request);
+        String message = request.decision() == null
+                ? llmClient.send(request.message())
+                : responseMessage(request, status);
         return new AgentResponse(
-                responseMessage(request, status),
+                message,
                 status,
                 null,
                 AgentStructuredOutput.empty(),
