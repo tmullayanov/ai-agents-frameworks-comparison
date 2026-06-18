@@ -2,6 +2,10 @@ package com.example.javaagent.boundary;
 
 import com.example.javaagent.agent.LlmClient;
 import com.example.javaagent.agent.SupportAgentService;
+import com.example.javaagent.agent.dto.AgentRequest;
+import com.example.javaagent.agent.dto.AgentResponse;
+import com.example.javaagent.agent.dto.LlmMessageRequest;
+import com.example.javaagent.agent.dto.LlmMessageResponse;
 import jakarta.validation.Valid;
 import org.springframework.http.ResponseEntity;
 import org.springframework.validation.annotation.Validated;

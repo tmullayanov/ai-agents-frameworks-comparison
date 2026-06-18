@@ -1,4 +1,4 @@
-package com.example.javaagent.boundary;
+package com.example.javaagent.agent.dto;
 
 import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.http.HttpStatus;

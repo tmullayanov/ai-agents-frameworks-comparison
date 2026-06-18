@@ -1,10 +1,10 @@
 package com.example.javaagent.agent;
 
-import com.example.javaagent.boundary.AgentRequest;
-import com.example.javaagent.boundary.AgentResponse;
-import com.example.javaagent.boundary.AgentStructuredOutput;
-import com.example.javaagent.boundary.ExecutionTrace;
-import com.example.javaagent.boundary.ResponseStatus;
+import com.example.javaagent.agent.dto.AgentRequest;
+import com.example.javaagent.agent.dto.AgentResponse;
+import com.example.javaagent.agent.dto.AgentStructuredOutput;
+import com.example.javaagent.agent.dto.ExecutionTrace;
+import com.example.javaagent.agent.dto.ResponseStatus;
 import org.springframework.stereotype.Service;
 
 import java.util.List;

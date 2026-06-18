@@ -1,4 +1,4 @@
-package com.example.javaagent.boundary;
+package com.example.javaagent.agent.dto;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
 
