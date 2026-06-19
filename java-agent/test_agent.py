@@ -3,6 +3,7 @@
 
 import argparse
 import json
+from datetime import datetime, timezone
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
@@ -79,10 +80,57 @@ def send_to_agent(
         return body
 
 
+def send_decision_to_agent(
+    confirmation_id: str,
+    decision_type: str,
+    message: str | None = None,
+    *,
+    base_url: str = "http://127.0.0.1:8080",
+    thread_id: str = "thread-001",
+    user_id: str = "user-001",
+    timeout: float = 120,
+) -> Any:
+    """Send one decision turn and return the decoded agent response."""
+    url = f"{base_url.rstrip('/')}/api/agent/turns"
+    payload = {
+        "thread_id": thread_id,
+        "user_id": user_id,
+        "message": None,
+        "decision": {
+            "confirmation_id": confirmation_id,
+            "type": decision_type,
+            "message": message,
+        },
+        "metadata": {},
+    }
+    request = Request(
+        url,
+        data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+        headers={"Content-Type": "application/json; charset=utf-8"},
+        method="POST",
+    )
+
+    try:
+        with urlopen(request, timeout=timeout) as http_response:
+            body = http_response.read().decode("utf-8")
+    except HTTPError as error:
+        body = error.read().decode("utf-8", errors="replace")
+        raise RuntimeError(f"Agent returned HTTP {error.code}: {body}") from error
+    except URLError as error:
+        raise RuntimeError(f"Could not connect to {url}: {error.reason}") from error
+    except TimeoutError as error:
+        raise RuntimeError(f"Agent did not respond within {timeout:g} seconds") from error
+
+    try:
+        return json.loads(body)
+    except json.JSONDecodeError:
+        return body
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--base-url", default="http://127.0.0.1:8080")
-    parser.add_argument("--thread-id", default="thread-001")
+    parser.add_argument("--thread-id", default=None)
     parser.add_argument("--user-id", default="user-001")
     parser.add_argument("--timeout", type=float, default=120)
     parser.add_argument(
@@ -99,9 +147,10 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
+    thread_id = args.thread_id or default_thread_id(args.scenario)
     texts = {
         "memory": [MEMORY_START_MESSAGE, MEMORY_FOLLOW_UP_MESSAGE],
-        "triage": [START_MESSAGE, CREATE_TICKET_MESSAGE],
+        "triage": [START_MESSAGE],
     }[args.scenario]
 
     for text in texts:
@@ -110,7 +159,7 @@ def main() -> int:
             response = send_to_agent(
                 text=text,
                 base_url=args.base_url,
-                thread_id=args.thread_id,
+                thread_id=thread_id,
                 user_id=args.user_id,
                 timeout=args.timeout,
             )
@@ -119,7 +168,41 @@ def main() -> int:
             return 1
 
         pretty_print(response, type="agent")
+
+        pending_confirmation = (
+            response.get("pending_confirmation")
+            if args.scenario == "triage" and isinstance(response, dict)
+            else None
+        )
+        confirmation_id = (
+            pending_confirmation.get("confirmation_id")
+            if isinstance(pending_confirmation, dict)
+            else None
+        )
+        if confirmation_id:
+            pretty_print(CREATE_TICKET_MESSAGE, type="user")
+            try:
+                decision_response = send_decision_to_agent(
+                    confirmation_id=confirmation_id,
+                    decision_type="approve",
+                    message=CREATE_TICKET_MESSAGE,
+                    base_url=args.base_url,
+                    thread_id=thread_id,
+                    user_id=args.user_id,
+                    timeout=args.timeout,
+                )
+            except RuntimeError as error:
+                pretty_print(error, type="error")
+                return 1
+
+            pretty_print(decision_response, type="agent")
+            break
     return 0
+
+
+def default_thread_id(scenario: str) -> str:
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S%f")
+    return f"{scenario}-{timestamp}"
 
 
 if __name__ == "__main__":

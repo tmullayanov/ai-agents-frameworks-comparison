@@ -28,6 +28,7 @@ public class LocalSupportTools {
             @ToolParam(description = "Search query.") String query,
             @ToolParam(description = "Optional service filter.", required = false) String service
     ) {
+        System.out.println("Tool: searchDocs");
         return dataset.docs().stream()
                 .filter(doc -> service == null || service.isBlank() || Objects.equals(doc.service(), service))
                 .map(doc -> DocSearchResult.from(doc, score(doc, query)))
@@ -38,6 +39,7 @@ public class LocalSupportTools {
 
     @Tool(name = "read_doc", description = "Read a document or runbook by id.")
     public Object readDoc(@ToolParam(description = "Document id.") String docId) {
+        System.out.println("Tool: readDoc");
         return dataset.docs().stream()
                 .filter(doc -> Objects.equals(doc.id(), docId))
                 .findFirst()
@@ -55,6 +57,7 @@ public class LocalSupportTools {
             @ToolParam(description = "Optional query filter.", required = false) String query,
             @ToolParam(description = "Maximum number of incidents.", required = false) Integer limit
     ) {
+        System.out.println("Tool: getRecentIncidents");
         int resultLimit = limit == null ? 5 : limit;
         String effectiveQuery = query == null ? service : query;
         return dataset.incidents().stream()
@@ -71,6 +74,7 @@ public class LocalSupportTools {
             @ToolParam(description = "Search query.") String query,
             @ToolParam(description = "Optional memory scope filter.", required = false) String scope
     ) {
+        System.out.println("Tool: searchMemory");
         return dataset.memoryFacts().stream()
                 .filter(memory -> scope == null || scope.isBlank() || Objects.equals(memory.scope(), scope))
                 .map(memory -> MemorySearchResult.from(memory, score(memory, query)))
@@ -79,13 +83,14 @@ public class LocalSupportTools {
                 .toList();
     }
 
-    @Tool(name = "create_incident_ticket", description = "Create a fake incident ticket after explicit user confirmation.")
+    @Tool(name = "create_incident_ticket", description = "Request incident ticket creation with a complete payload; the application approval gate requires human confirmation before the side effect is executed.")
     public IncidentTicket createIncidentTicket(
             @ToolParam(description = "Incident title.") String title,
             @ToolParam(description = "Incident severity.") String severity,
             @ToolParam(description = "Incident description.") String description,
             @ToolParam(description = "Optional metadata.", required = false) Map<String, Object> metadata
     ) {
+        System.out.println("Tool: createIncidentTicket");
         return dataset.addTicket(title, severity, description, metadata);
     }
 
@@ -98,6 +103,7 @@ public class LocalSupportTools {
             @ToolParam(description = "TTL in days.") int ttlDays,
             @ToolParam(description = "Memory kind.", required = false) String kind
     ) {
+        System.out.println("Tool: saveMemory");
         String effectiveKind = kind == null || kind.isBlank() ? "operational_pattern" : kind;
         return dataset.addMemory(scope, fact, source, confidence, ttlDays, effectiveKind);
     }

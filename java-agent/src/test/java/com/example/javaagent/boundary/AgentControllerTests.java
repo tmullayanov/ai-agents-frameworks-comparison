@@ -58,7 +58,7 @@ class AgentControllerTests {
     }
 
     @Test
-    void acceptsDecisionTurn() throws Exception {
+    void rejectsDecisionTurnWithoutPendingConfirmation() throws Exception {
         mockMvc.perform(post("/api/agent/turns")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
@@ -75,8 +75,9 @@ class AgentControllerTests {
                                 }
                                 """))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.status").value("completed"))
-                .andExpect(jsonPath("$.trace.final_status").value("completed"));
+                .andExpect(jsonPath("$.status").value("error"))
+                .andExpect(jsonPath("$.message").value("Pending confirmation was not found."))
+                .andExpect(jsonPath("$.trace.final_status").value("error"));
 
         verifyNoInteractions(llmClient);
     }
