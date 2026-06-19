@@ -29,7 +29,7 @@ class AgentControllerTests {
 
     @Test
     void acceptsMessageTurn() throws Exception {
-        given(llmClient.send("Billing API is failing after deploy."))
+        given(llmClient.send("Billing API is failing after deploy.", "10:thread-0018:user-001"))
                 .willReturn("Use docs, incidents, and memory to diagnose billing-api.");
 
         mockMvc.perform(post("/api/agent/turns")
@@ -54,7 +54,7 @@ class AgentControllerTests {
                 .andExpect(jsonPath("$.trace.user_id").value("user-001"))
                 .andExpect(jsonPath("$.trace.final_status").value("completed"));
 
-        verify(llmClient).send("Billing API is failing after deploy.");
+        verify(llmClient).send("Billing API is failing after deploy.", "10:thread-0018:user-001");
     }
 
     @Test

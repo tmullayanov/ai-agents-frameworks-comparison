@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Send one test message to the Java agent and print the response."""
+"""Send a small user-level scenario to the Java agent and print the response."""
 
 import argparse
 import json
@@ -8,9 +8,21 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 
-DEFAULT_MESSAGE = (
-    "После деплоя начал падать billing-api. В логах много payment_provider_timeout. "
-    "Посмотри runbook, похожие инциденты и предложи план диагностики. Если нужно — заведи incident ticket"
+START_MESSAGE = (
+    "После деплоя начал падать `billing-api`. В логах много `payment_provider_timeout`. "
+    "Посмотри runbook, похожие инциденты и предложи план диагностики. Если нужно — заведи incident ticket."
+)
+
+CREATE_TICKET_MESSAGE = "Да, proposed_ticket выглядит хорошо - заведи его"
+
+MEMORY_START_MESSAGE = (
+    "Запомни контекст этого обращения: сервис `billing-api`, симптом `payment_provider_timeout`, "
+    "появилось сразу после деплоя. Пока ничего не делай, просто подтверди, что понял контекст."
+)
+
+MEMORY_FOLLOW_UP_MESSAGE = (
+    "Какой сервис и какой симптом я называл в предыдущем сообщении? "
+    "Ответь кратко, одной строкой."
 )
 
 
@@ -73,27 +85,40 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--thread-id", default="thread-001")
     parser.add_argument("--user-id", default="user-001")
     parser.add_argument("--timeout", type=float, default=120)
+    parser.add_argument(
+        "--scenario",
+        choices=("memory", "triage"),
+        default="memory",
+        help=(
+            "memory checks pure thread continuation; triage runs the broader support scenario "
+            "that will only become fully meaningful after HITL approval is implemented"
+        ),
+    )
     return parser.parse_args()
 
 
 def main() -> int:
     args = parse_args()
-    text = DEFAULT_MESSAGE
+    texts = {
+        "memory": [MEMORY_START_MESSAGE, MEMORY_FOLLOW_UP_MESSAGE],
+        "triage": [START_MESSAGE, CREATE_TICKET_MESSAGE],
+    }[args.scenario]
 
-    pretty_print(text, type="user")
-    try:
-        response = send_to_agent(
-            text=text,
-            base_url=args.base_url,
-            thread_id=args.thread_id,
-            user_id=args.user_id,
-            timeout=args.timeout,
-        )
-    except RuntimeError as error:
-        pretty_print(error, type="error")
-        return 1
+    for text in texts:
+        pretty_print(text, type="user")
+        try:
+            response = send_to_agent(
+                text=text,
+                base_url=args.base_url,
+                thread_id=args.thread_id,
+                user_id=args.user_id,
+                timeout=args.timeout,
+            )
+        except RuntimeError as error:
+            pretty_print(error, type="error")
+            return 1
 
-    pretty_print(response, type="agent")
+        pretty_print(response, type="agent")
     return 0
 
 

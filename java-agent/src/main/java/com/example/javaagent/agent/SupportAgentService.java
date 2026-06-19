@@ -24,7 +24,7 @@ public class SupportAgentService {
                 ? ResponseStatus.COMPLETED
                 : decisionStatus(request);
         String message = request.decision() == null
-                ? llmClient.send(request.message())
+                ? llmClient.send(request.message(), conversationId(request))
                 : responseMessage(request, status);
         return new AgentResponse(
                 message,
@@ -41,6 +41,14 @@ public class SupportAgentService {
                         status
                 )
         );
+    }
+
+    static String conversationId(AgentRequest request) {
+        return lengthPrefixed(request.threadId()) + lengthPrefixed(request.userId());
+    }
+
+    private static String lengthPrefixed(String value) {
+        return value.length() + ":" + value;
     }
 
     private ResponseStatus decisionStatus(AgentRequest request) {
