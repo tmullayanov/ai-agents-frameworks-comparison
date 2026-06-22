@@ -22,7 +22,7 @@ class AgentToolRegistryTests {
     void exposesLocalToolsThroughGuardedCallbacks() {
         FakeSupportDataset dataset = new FakeSupportDataset();
         AgentToolRegistry registry = new AgentToolRegistry(
-                new LocalSupportTools(dataset),
+                new LocalAgentToolCallbackSource(new LocalSupportTools(dataset)),
                 new InMemoryApprovalStore(),
                 ToolPolicy.supportTriageDefaults()
         );
@@ -43,7 +43,7 @@ class AgentToolRegistryTests {
     void guardedLocalCreateTicketCallbackDoesNotCreateTicketBeforeApproval() {
         FakeSupportDataset dataset = new FakeSupportDataset();
         AgentToolRegistry registry = new AgentToolRegistry(
-                new LocalSupportTools(dataset),
+                new LocalAgentToolCallbackSource(new LocalSupportTools(dataset)),
                 new InMemoryApprovalStore(),
                 ToolPolicy.supportTriageDefaults()
         );
@@ -83,7 +83,7 @@ class AgentToolRegistryTests {
         FakeSupportDataset dataset = new FakeSupportDataset();
         InMemoryApprovalStore approvalStore = new InMemoryApprovalStore();
         AgentToolRegistry registry = new AgentToolRegistry(
-                new LocalSupportTools(dataset),
+                new LocalAgentToolCallbackSource(new LocalSupportTools(dataset)),
                 approvalStore,
                 ToolPolicy.supportTriageDefaults()
         );

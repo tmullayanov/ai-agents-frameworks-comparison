@@ -1,9 +1,7 @@
 package com.example.javaagent.tools;
 
 import com.example.javaagent.agent.ApprovalStore;
-import com.example.javaagent.localtools.LocalSupportTools;
 import org.springframework.ai.tool.ToolCallback;
-import org.springframework.ai.tool.method.MethodToolCallbackProvider;
 import org.springframework.stereotype.Component;
 
 import java.util.Arrays;
@@ -14,15 +12,11 @@ public class AgentToolRegistry {
     private final ToolCallback[] toolCallbacks;
 
     public AgentToolRegistry(
-            LocalSupportTools localSupportTools,
+            AgentToolCallbackSource toolCallbackSource,
             ApprovalStore approvalStore,
             ToolPolicy toolPolicy
     ) {
-        ToolCallback[] localCallbacks = MethodToolCallbackProvider.builder()
-                .toolObjects(localSupportTools)
-                .build()
-                .getToolCallbacks();
-        this.toolCallbacks = Arrays.stream(localCallbacks)
+        this.toolCallbacks = Arrays.stream(toolCallbackSource.getToolCallbacks())
                 .map(callback -> new GuardedToolCallback(callback, toolPolicy, approvalStore))
                 .toArray(ToolCallback[]::new);
     }
