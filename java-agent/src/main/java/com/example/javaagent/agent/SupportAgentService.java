@@ -4,6 +4,7 @@ import com.example.javaagent.agent.dto.AgentRequest;
 import com.example.javaagent.agent.dto.AgentResponse;
 import com.example.javaagent.agent.dto.AgentStructuredOutput;
 import com.example.javaagent.agent.dto.ConfirmationDecisionType;
+import com.example.javaagent.agent.dto.DiagnosticSummary;
 import com.example.javaagent.agent.dto.ExecutionTrace;
 import com.example.javaagent.agent.dto.IncidentTicketPayload;
 import com.example.javaagent.agent.dto.PendingConfirmation;
@@ -13,6 +14,8 @@ import com.example.javaagent.tools.ToolExecutionContext;
 import com.example.javaagent.tools.ToolExecutionContextHolder;
 import com.example.javaagent.tools.ToolApprovalRequiredException;
 import com.example.javaagent.tools.ToolTraceRecorder;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
 import java.util.List;
@@ -21,6 +24,8 @@ import java.util.UUID;
 
 @Service
 public class SupportAgentService {
+
+    private static final Logger logger = LoggerFactory.getLogger(SupportAgentService.class);
 
     private final LlmClient llmClient;
     private final ApprovalStore approvalStore;
@@ -78,6 +83,7 @@ public class SupportAgentService {
             return response(request, runId, List.of(), "Pending confirmation was not found.", ResponseStatus.ERROR, null);
         }
 
+        // TODO: нужно и тут отправлять результат в LLM с пометкой "пользователь запретил вызывать тул".
         if (request.decision().type() == ConfirmationDecisionType.REJECT) {
             approvalStore.resolve(request.threadId(), request.userId(), pending.confirmationId());
             return response(request, runId, List.of(), "Confirmation rejected.", ResponseStatus.REJECTED, null);
@@ -121,7 +127,7 @@ public class SupportAgentService {
                 message,
                 status,
                 pendingConfirmation,
-                structuredOutput(pendingConfirmation),
+                structuredOutput(request, status, message, pendingConfirmation),
                 new ExecutionTrace(
                         runId,
                         request.threadId(),
@@ -175,20 +181,41 @@ public class SupportAgentService {
         return value.length() + ":" + value;
     }
 
-    private AgentStructuredOutput structuredOutput(PendingConfirmation pendingConfirmation) {
-        if (pendingConfirmation == null || !"create_incident_ticket".equals(pendingConfirmation.actionName())) {
-            return AgentStructuredOutput.empty();
-        }
-
-        Map<String, Object> args = pendingConfirmation.actionArgs();
+    private AgentStructuredOutput structuredOutput(
+            AgentRequest request,
+            ResponseStatus status,
+            String message,
+            PendingConfirmation pendingConfirmation
+    ) {
         return new AgentStructuredOutput(
-                null,
-                new IncidentTicketPayload(
-                        stringArg(args, "title"),
-                        stringArg(args, "severity"),
-                        stringArg(args, "description"),
-                        metadataArg(args)
-                )
+                diagnosticSummary(request, status, message),
+                proposedTicket(pendingConfirmation)
+        );
+    }
+
+    private DiagnosticSummary diagnosticSummary(AgentRequest request, ResponseStatus status, String message) {
+        if (status != ResponseStatus.COMPLETED) {
+            return null;
+        }
+        try {
+            return llmClient.extractDiagnosticSummary(conversationId(request), message).orElse(null);
+        } catch (RuntimeException exception) {
+            logger.warn("DiagnosticSummary extraction failed for threadId={}, userId={}",
+                    request.threadId(), request.userId(), exception);
+            return null;
+        }
+    }
+
+    private IncidentTicketPayload proposedTicket(PendingConfirmation pendingConfirmation) {
+        if (pendingConfirmation == null || !"create_incident_ticket".equals(pendingConfirmation.actionName())) {
+            return null;
+        }
+        Map<String, Object> args = pendingConfirmation.actionArgs();
+        return new IncidentTicketPayload(
+                stringArg(args, "title"),
+                stringArg(args, "severity"),
+                stringArg(args, "description"),
+                metadataArg(args)
         );
     }
 

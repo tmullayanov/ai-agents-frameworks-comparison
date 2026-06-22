@@ -3,6 +3,7 @@ package com.example.javaagent.agent;
 import com.example.javaagent.agent.dto.AgentRequest;
 import com.example.javaagent.agent.dto.ConfirmationDecision;
 import com.example.javaagent.agent.dto.ConfirmationDecisionType;
+import com.example.javaagent.agent.dto.DiagnosticSummary;
 import com.example.javaagent.agent.dto.PendingConfirmation;
 import com.example.javaagent.agent.dto.ResponseStatus;
 import com.example.javaagent.tools.ToolExecutionContextHolder;
@@ -12,6 +13,7 @@ import org.junit.jupiter.api.Test;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -38,6 +40,7 @@ class SupportAgentServiceHitlTests {
 
         assertThat(firstTurn.status()).isEqualTo(ResponseStatus.CONFIRMATION_REQUIRED);
         assertThat(firstTurn.pendingConfirmation()).isEqualTo(pending);
+        assertThat(firstTurn.structured().diagnosticSummary()).isNull();
         assertThat(firstTurn.structured().proposedTicket().title())
                 .isEqualTo("billing-api payment_provider_timeout after deploy");
         assertThat(firstTurn.trace().confirmationRequired()).isTrue();
@@ -54,6 +57,7 @@ class SupportAgentServiceHitlTests {
         assertThat(approveTurn.status()).isEqualTo(ResponseStatus.COMPLETED);
         assertThat(approveTurn.message()).isEqualTo("Final assistant response after approved tool execution.");
         assertThat(approveTurn.pendingConfirmation()).isNull();
+        assertThat(approveTurn.structured().diagnosticSummary().service()).isEqualTo("billing-api");
         assertThat(pendingActionExecutor.executedConfirmations()).containsExactly(pending);
         assertThat(llmClient.messages()).hasSize(2);
         assertThat(llmClient.messages().get(1))
@@ -64,6 +68,8 @@ class SupportAgentServiceHitlTests {
                     assertThat(message).contains("Continue the conversation based on this result.");
                 });
         assertThat(llmClient.contextAvailableForMessages()).containsExactly(true, true);
+        assertThat(llmClient.summaryInputs()).hasSize(1);
+        assertThat(llmClient.contextAvailableForSummaries()).containsExactly(false);
     }
 
     @Test
@@ -85,6 +91,7 @@ class SupportAgentServiceHitlTests {
         assertThat(followUp.status()).isEqualTo(ResponseStatus.CONFIRMATION_REQUIRED);
         assertThat(followUp.pendingConfirmation()).isEqualTo(pending);
         assertThat(llmClient.calls()).isEqualTo(1);
+        assertThat(llmClient.summaryInputs()).isEmpty();
         assertThat(pendingActionExecutor.executedConfirmations()).isEmpty();
     }
 
@@ -111,6 +118,8 @@ class SupportAgentServiceHitlTests {
 
         assertThat(rejectTurn.status()).isEqualTo(ResponseStatus.REJECTED);
         assertThat(rejectTurn.message()).isEqualTo("Confirmation rejected.");
+        assertThat(rejectTurn.structured().diagnosticSummary()).isNull();
+        assertThat(llmClient.summaryInputs()).isEmpty();
         assertThat(pendingActionExecutor.executedConfirmations()).isEmpty();
 
         var staleApprove = service.run(decisionRequest(
@@ -122,6 +131,42 @@ class SupportAgentServiceHitlTests {
 
         assertThat(staleApprove.status()).isEqualTo(ResponseStatus.ERROR);
         assertThat(pendingActionExecutor.executedConfirmations()).isEmpty();
+    }
+
+    @Test
+    void completedMessageTurnIncludesDiagnosticSummaryWhenExtractionSucceeds() {
+        CompletingLlmClient llmClient = new CompletingLlmClient("Use docs and inspect billing-api timeouts.");
+        SupportAgentService service = new SupportAgentService(
+                llmClient,
+                new InMemoryApprovalStore(),
+                pendingConfirmation -> "unused"
+        );
+
+        var response = service.run(messageRequest("thread-001", "user-001", "billing-api is failing."));
+
+        assertThat(response.status()).isEqualTo(ResponseStatus.COMPLETED);
+        assertThat(response.structured().diagnosticSummary().service()).isEqualTo("billing-api");
+        assertThat(response.structured().diagnosticSummary().symptoms())
+                .containsExactly("payment_provider_timeout");
+        assertThat(llmClient.summaryInputs()).containsExactly("Use docs and inspect billing-api timeouts.");
+        assertThat(llmClient.contextAvailableForSummaries()).containsExactly(false);
+    }
+
+    @Test
+    void completedMessageTurnSurvivesDiagnosticSummaryExtractionFailure() {
+        CompletingLlmClient llmClient = new CompletingLlmClient("Use docs and inspect billing-api timeouts.");
+        llmClient.failSummaryExtraction();
+        SupportAgentService service = new SupportAgentService(
+                llmClient,
+                new InMemoryApprovalStore(),
+                pendingConfirmation -> "unused"
+        );
+
+        var response = service.run(messageRequest("thread-001", "user-001", "billing-api is failing."));
+
+        assertThat(response.status()).isEqualTo(ResponseStatus.COMPLETED);
+        assertThat(response.message()).isEqualTo("Use docs and inspect billing-api timeouts.");
+        assertThat(response.structured().diagnosticSummary()).isNull();
     }
 
     @Test
@@ -196,6 +241,8 @@ class SupportAgentServiceHitlTests {
         private int calls;
         private final List<String> messages = new ArrayList<>();
         private final List<Boolean> contextAvailableForMessages = new ArrayList<>();
+        private final List<String> summaryInputs = new ArrayList<>();
+        private final List<Boolean> contextAvailableForSummaries = new ArrayList<>();
 
         private BlockingLlmClient(PendingConfirmation pendingConfirmation) {
             this.pendingConfirmation = pendingConfirmation;
@@ -229,6 +276,21 @@ class SupportAgentServiceHitlTests {
             return List.copyOf(contextAvailableForMessages);
         }
 
+        @Override
+        public Optional<DiagnosticSummary> extractDiagnosticSummary(String conversationId, String finalAnswer) {
+            summaryInputs.add(finalAnswer);
+            contextAvailableForSummaries.add(isToolExecutionContextAvailable());
+            return Optional.of(summary());
+        }
+
+        List<String> summaryInputs() {
+            return List.copyOf(summaryInputs);
+        }
+
+        List<Boolean> contextAvailableForSummaries() {
+            return List.copyOf(contextAvailableForSummaries);
+        }
+
         private boolean isToolExecutionContextAvailable() {
             try {
                 ToolExecutionContextHolder.current();
@@ -237,6 +299,68 @@ class SupportAgentServiceHitlTests {
                 return false;
             }
         }
+    }
+
+    private static final class CompletingLlmClient implements LlmClient {
+
+        private final String response;
+        private final List<String> summaryInputs = new ArrayList<>();
+        private final List<Boolean> contextAvailableForSummaries = new ArrayList<>();
+        private boolean failSummaryExtraction;
+
+        private CompletingLlmClient(String response) {
+            this.response = response;
+        }
+
+        @Override
+        public String send(String message) {
+            return response;
+        }
+
+        @Override
+        public String send(String message, String conversationId) {
+            return response;
+        }
+
+        @Override
+        public Optional<DiagnosticSummary> extractDiagnosticSummary(String conversationId, String finalAnswer) {
+            if (failSummaryExtraction) {
+                throw new IllegalStateException("structured output failed");
+            }
+            summaryInputs.add(finalAnswer);
+            contextAvailableForSummaries.add(isToolExecutionContextAvailable());
+            return Optional.of(summary());
+        }
+
+        void failSummaryExtraction() {
+            failSummaryExtraction = true;
+        }
+
+        List<String> summaryInputs() {
+            return List.copyOf(summaryInputs);
+        }
+
+        List<Boolean> contextAvailableForSummaries() {
+            return List.copyOf(contextAvailableForSummaries);
+        }
+
+        private boolean isToolExecutionContextAvailable() {
+            try {
+                ToolExecutionContextHolder.current();
+                return true;
+            } catch (IllegalStateException exception) {
+                return false;
+            }
+        }
+    }
+
+    private static DiagnosticSummary summary() {
+        return new DiagnosticSummary(
+                "billing-api",
+                List.of("payment_provider_timeout"),
+                "SEV-2 candidate",
+                false
+        );
     }
 
     private static final class RecordingPendingActionExecutor implements PendingActionExecutor {

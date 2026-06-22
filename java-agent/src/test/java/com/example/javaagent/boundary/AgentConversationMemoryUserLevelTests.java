@@ -56,8 +56,9 @@ class AgentConversationMemoryUserLevelTests {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.message", containsString("billing-api")));
 
-        assertThat(chatModel.prompts()).hasSize(2);
-        assertThat(userTexts(chatModel.prompts().get(1)))
+        List<Prompt> triagePrompts = triagePrompts(chatModel.prompts());
+        assertThat(triagePrompts).hasSize(2);
+        assertThat(userTexts(triagePrompts.get(1)))
                 .contains(FIRST_MESSAGE, FOLLOW_UP);
     }
 
@@ -101,6 +102,18 @@ class AgentConversationMemoryUserLevelTests {
                 .toList();
     }
 
+    private static List<Prompt> triagePrompts(List<Prompt> prompts) {
+        return prompts.stream()
+                .filter(AgentConversationMemoryUserLevelTests::isTriagePrompt)
+                .toList();
+    }
+
+    private static boolean isTriagePrompt(Prompt prompt) {
+        return prompt.getInstructions().stream()
+                .anyMatch(message -> message.getMessageType() == MessageType.SYSTEM
+                        && message.getText().contains("You are Support Triage Agent"));
+    }
+
     @TestConfiguration
     static class RecordingChatModelConfiguration {
 
@@ -120,13 +133,25 @@ class AgentConversationMemoryUserLevelTests {
             prompts.add(prompt);
             List<String> userTexts = userTexts(prompt);
             String currentUserText = userTexts.getLast();
-            String response = switch (currentUserText) {
-                case FIRST_MESSAGE -> "I will remember billing-api.";
-                case FOLLOW_UP -> userTexts.contains(FIRST_MESSAGE)
-                        ? "You asked about billing-api."
-                        : "I do not have prior billing context.";
-                default -> "Unhandled test prompt.";
-            };
+            String response;
+            if (currentUserText.startsWith("Conversation:")) {
+                response = """
+                        {
+                          "service": "billing-api",
+                          "symptoms": ["failing after deploy"],
+                          "severity_guess": null,
+                          "requires_confirmation": false
+                        }
+                        """;
+            } else {
+                response = switch (currentUserText) {
+                    case FIRST_MESSAGE -> "I will remember billing-api.";
+                    case FOLLOW_UP -> userTexts.contains(FIRST_MESSAGE)
+                            ? "You asked about billing-api."
+                            : "I do not have prior billing context.";
+                    default -> "Unhandled test prompt.";
+                };
+            }
             return new ChatResponse(List.of(new Generation(new org.springframework.ai.chat.messages.AssistantMessage(response))));
         }
 
