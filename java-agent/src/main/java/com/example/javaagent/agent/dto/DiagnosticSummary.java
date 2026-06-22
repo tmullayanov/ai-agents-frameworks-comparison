@@ -12,4 +12,7 @@ public record DiagnosticSummary(
         @JsonProperty("requires_confirmation")
         boolean requiresConfirmation
 ) {
+    public DiagnosticSummary {
+        symptoms = symptoms == null ? List.of() : List.copyOf(symptoms);
+    }
 }

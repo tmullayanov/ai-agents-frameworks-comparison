@@ -150,7 +150,7 @@ def main() -> int:
     thread_id = args.thread_id or default_thread_id(args.scenario)
     texts = {
         "memory": [MEMORY_START_MESSAGE, MEMORY_FOLLOW_UP_MESSAGE],
-        "triage": [START_MESSAGE],
+        "triage": [START_MESSAGE, CREATE_TICKET_MESSAGE],
     }[args.scenario]
 
     for text in texts:
@@ -169,18 +169,16 @@ def main() -> int:
 
         pretty_print(response, type="agent")
 
-        pending_confirmation = (
-            response.get("pending_confirmation")
-            if args.scenario == "triage" and isinstance(response, dict)
-            else None
-        )
-        confirmation_id = (
-            pending_confirmation.get("confirmation_id")
-            if isinstance(pending_confirmation, dict)
-            else None
-        )
+        confirmation_id = pending_confirmation_id(response)
         if confirmation_id:
-            pretty_print(CREATE_TICKET_MESSAGE, type="user")
+            pretty_print(
+                {
+                    "confirmation_id": confirmation_id,
+                    "type": "approve",
+                    "message": CREATE_TICKET_MESSAGE,
+                },
+                type="user",
+            )
             try:
                 decision_response = send_decision_to_agent(
                     confirmation_id=confirmation_id,
@@ -198,6 +196,18 @@ def main() -> int:
             pretty_print(decision_response, type="agent")
             break
     return 0
+
+
+def pending_confirmation_id(response: Any) -> str | None:
+    if not isinstance(response, dict):
+        return None
+
+    pending_confirmation = response.get("pending_confirmation")
+    if not isinstance(pending_confirmation, dict):
+        return None
+
+    confirmation_id = pending_confirmation.get("confirmation_id")
+    return confirmation_id if isinstance(confirmation_id, str) else None
 
 
 def default_thread_id(scenario: str) -> str:
