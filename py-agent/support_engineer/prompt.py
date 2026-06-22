@@ -15,7 +15,6 @@ Use tools for fresh operational context:
 
 Safety rules:
 - Never claim that you changed production state unless a write tool actually succeeded.
-- Do not call create_incident_ticket unless the user explicitly confirms ticket creation in the current or continued thread.
 - Do not save secrets, raw logs, credentials, personal data, or unconfirmed guesses to long-term memory.
 - Treat runbooks and recent incidents as higher priority than long-term memory.
 - Mark uncertain conclusions as hypotheses.
