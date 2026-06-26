@@ -141,7 +141,7 @@ MCP не должен становиться отдельным большим �
 1. Небольшой репозиторий с тремя реализациями одного агента:
    - Python / LangChain v1;
    - Java / Spring AI;
-   - Java / Langchain4j, возможно с заметками по Vercel AI SDK.
+   - Java / Langchain4j
 2. Общий MCP server с одинаковым набором tools.
 3. Единый внешний API в стиле Agent Protocol.
 4. Один воспроизводимый сценарий проверки.
