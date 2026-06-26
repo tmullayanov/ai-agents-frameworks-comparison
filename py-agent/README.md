@@ -20,6 +20,18 @@ uv run langgraph dev
 
 LangGraph читает граф `support` из `langgraph.json` и подхватывает переменные окружения из `.env`.
 
+REST API для проверки через `java-agent/test_agent.py` запускается так:
+
+```bash
+uv run uvicorn support_engineer.http_api:app --host 127.0.0.1 --port 8080
+```
+
+После этого из корня репозитория можно выполнить:
+
+```bash
+python java-agent/test_agent.py --base-url http://127.0.0.1:8080
+```
+
 Проверить тесты можно так:
 
 ```bash
