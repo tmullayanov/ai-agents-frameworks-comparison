@@ -12,6 +12,7 @@ import java.util.Map;
 public class LocalSupportReadTools {
 
     private final LocalSupportToolStore store;
+    private static final System.Logger logger = System.getLogger(LocalSupportReadTools.class.getName());
 
     public LocalSupportReadTools(LocalSupportToolStore store) {
         this.store = store;
@@ -22,6 +23,7 @@ public class LocalSupportReadTools {
             @P(name = "query", description = "Search query.") String query,
             @P(name = "service", description = "Optional service name.", required = false) String service
     ) {
+        logger.log(System.Logger.Level.INFO, "LocalSupportReadTools searchDocs");
         return store.docs().stream()
                 .filter(doc -> service == null || service.equals(doc.get("service")))
                 .map(doc -> scored(doc, query))
@@ -32,6 +34,7 @@ public class LocalSupportReadTools {
 
     @Tool(name = "read_doc", value = "Read a document or runbook by id.")
     public Map<String, Object> readDoc(@P(name = "doc_id", description = "Document id.") String docId) {
+        logger.log(System.Logger.Level.INFO, "LocalSupportReadTools readDoc");
         return store.docs().stream()
                 .filter(doc -> docId.equals(doc.get("id")))
                 .findFirst()
@@ -48,7 +51,9 @@ public class LocalSupportReadTools {
             @P(name = "query", description = "Optional incident search query.", required = false) String query,
             @P(name = "limit", description = "Maximum number of incidents to return.", defaultValue = "5") Integer limit
     ) {
+        logger.log(System.Logger.Level.INFO, "LocalSupportReadTools getRecentIncidents");
         String effectiveQuery = query == null ? service : query;
+        logger.log(System.Logger.Level.INFO, "effectiveQuery = " + effectiveQuery);
         return store.incidents().stream()
                 .filter(incident -> service.equals(incident.get("service")))
                 .map(incident -> scored(incident, effectiveQuery))
@@ -63,6 +68,7 @@ public class LocalSupportReadTools {
             @P(name = "query", description = "Search query.") String query,
             @P(name = "scope", description = "Optional memory scope.", required = false) String scope
     ) {
+        logger.log(System.Logger.Level.INFO, "LocalSupportReadTools searchMemory");
         return store.memoryFacts().stream()
                 .filter(memory -> scope == null || scope.equals(memory.get("scope")))
                 .map(memory -> scored(memory, query))

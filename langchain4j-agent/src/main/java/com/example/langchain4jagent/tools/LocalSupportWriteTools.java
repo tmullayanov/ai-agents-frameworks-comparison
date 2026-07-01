@@ -10,6 +10,7 @@ import java.util.Map;
 public class LocalSupportWriteTools {
 
     private final LocalSupportToolStore store;
+    private final System.Logger logger = System.getLogger(LocalSupportWriteTools.class.getName());
 
     public LocalSupportWriteTools(LocalSupportToolStore store) {
         this.store = store;
@@ -22,7 +23,9 @@ public class LocalSupportWriteTools {
             @P(name = "description", description = "Incident description.") String description,
             @P(name = "metadata", description = "Optional incident metadata.", required = false) Map<String, Object> metadata
     ) {
+        logger.log(System.Logger.Level.INFO, "LocalSupportWriteTools createIncidentTicket");
         String ticketId = "INC-FAKE-%04d".formatted(store.createdTicketCount() + 1);
+        logger.log(System.Logger.Level.INFO, "create ticket with ticketId = " + ticketId);
         return store.addTicket(LocalSupportToolStore.mapOf(
                 "id", ticketId,
                 "title", title,
@@ -42,7 +45,9 @@ public class LocalSupportWriteTools {
             @P(name = "ttl_days", description = "Time to live in days.") Integer ttlDays,
             @P(name = "kind", description = "Memory fact kind.", defaultValue = "operational_pattern") String kind
     ) {
+        logger.log(System.Logger.Level.INFO, "LocalSupportWriteTools saveMemory");
         String memoryId = "mem-local-%03d".formatted(store.memoryFactCount() + 1);
+        logger.log(System.Logger.Level.INFO, "save memory with memoryId = " + memoryId);
         return store.addMemoryFact(LocalSupportToolStore.mapOf(
                 "id", memoryId,
                 "scope", scope,

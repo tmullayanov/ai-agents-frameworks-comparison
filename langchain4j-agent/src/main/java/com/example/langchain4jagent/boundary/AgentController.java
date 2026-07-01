@@ -17,6 +17,7 @@ import org.springframework.web.bind.annotation.RestController;
 public class AgentController {
 
     private final SupportTriageService supportTriageService;
+    private final System.Logger logger = System.getLogger(AgentController.class.getName());
 
     public AgentController(SupportTriageService supportTriageService) {
         this.supportTriageService = supportTriageService;
@@ -24,6 +25,7 @@ public class AgentController {
 
     @PostMapping("/turns")
     public ResponseEntity<AgentResponse> runTurn(@Valid @RequestBody AgentRequest request) {
+        logger.log(System.Logger.Level.INFO, "Agent Turn Request incoming");
         return ResponseEntity.ok(supportTriageService.run(request));
     }
 }
