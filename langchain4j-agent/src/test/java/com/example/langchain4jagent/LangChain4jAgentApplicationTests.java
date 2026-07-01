@@ -6,7 +6,10 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.context.annotation.Bean;
 
-@SpringBootTest(properties = "spring.autoconfigure.exclude=dev.langchain4j.spring.LangChain4jAutoConfiguration")
+@SpringBootTest(properties = {
+        "spring.autoconfigure.exclude=dev.langchain4j.spring.LangChain4jAutoConfiguration",
+        "agent.tools.backend=local"
+})
 class LangChain4jAgentApplicationTests {
 
     @Test

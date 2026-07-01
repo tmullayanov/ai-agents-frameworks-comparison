@@ -22,6 +22,7 @@ class LangChain4jLocalToolsIntegrationTests {
     @Test
     void aiServiceExecutesLocalReadToolAndReturnsResultToModel() {
         ToolCallingChatModel model = new ToolCallingChatModel();
+        LocalSupportToolStore store = new LocalSupportToolStore();
         SupportTriageAssistant assistant = AiServices.builder(SupportTriageAssistant.class)
                 .chatModel(model)
                 .chatMemoryProvider(memoryId -> MessageWindowChatMemory.builder()
@@ -29,7 +30,8 @@ class LangChain4jLocalToolsIntegrationTests {
                         .maxMessages(20)
                         .chatMemoryStore(new InMemoryChatMemoryStore())
                         .build())
-                .tools(new LocalSupportReadTools(new LocalSupportToolStore()))
+                .tools(new LocalSupportReadTools(store))
+                .tools(new LocalSupportWriteTools(store))
                 .build();
 
         String response = assistant.chat("memory-1", "Find billing-api timeout docs");
@@ -39,7 +41,7 @@ class LangChain4jLocalToolsIntegrationTests {
         assertThat(model.requests().getFirst().parameters().toolSpecifications())
                 .extracting(tool -> tool.name())
                 .contains("search_docs", "read_doc", "get_recent_incidents", "search_memory")
-                .doesNotContain("create_incident_ticket", "save_memory");
+                .contains("create_incident_ticket", "save_memory");
         assertThat(toolResultTexts(model.requests().get(1)))
                 .singleElement()
                 .asString()

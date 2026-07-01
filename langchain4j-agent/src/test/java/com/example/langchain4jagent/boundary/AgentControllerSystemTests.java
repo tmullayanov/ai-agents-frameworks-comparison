@@ -22,7 +22,10 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
-@SpringBootTest(properties = "spring.autoconfigure.exclude=dev.langchain4j.spring.LangChain4jAutoConfiguration")
+@SpringBootTest(properties = {
+        "spring.autoconfigure.exclude=dev.langchain4j.spring.LangChain4jAutoConfiguration",
+        "agent.tools.backend=local"
+})
 @AutoConfigureMockMvc
 class AgentControllerSystemTests {
 

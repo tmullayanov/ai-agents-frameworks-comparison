@@ -2,11 +2,14 @@ package com.example.langchain4jagent.tools;
 
 import dev.langchain4j.agent.tool.P;
 import dev.langchain4j.agent.tool.Tool;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnExpression;
 import org.springframework.stereotype.Component;
 
 import java.util.Map;
 
 @Component
+@ConditionalOnExpression("'${agent.tools.backend:${USE_LOCAL_TOOLS:local}}' == 'local' "
+        + "|| '${agent.tools.backend:${USE_LOCAL_TOOLS:local}}' == 'true'")
 public class LocalSupportWriteTools {
 
     private final LocalSupportToolStore store;
