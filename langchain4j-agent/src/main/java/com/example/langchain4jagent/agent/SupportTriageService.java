@@ -22,6 +22,8 @@ public class SupportTriageService {
     private final ApprovalStore approvalStore;
     private final PendingActionExecutor pendingActionExecutor;
 
+    private final System.Logger logger = System.getLogger(SupportTriageService.class.getName());
+
     @Autowired
     public SupportTriageService(
             SupportTriageAssistant assistant,
@@ -40,11 +42,14 @@ public class SupportTriageService {
     }
 
     public AgentResponse run(AgentRequest request) {
+        logger.log(System.Logger.Level.INFO, "Running Support Triage Service.");
         if (request.decision() != null) {
+            logger.log(System.Logger.Level.INFO, "Support Triage Decision: " + request.decision());
             return handleDecisionTurn(request);
         }
 
         if (request.message() == null || request.message().isBlank()) {
+            logger.log(System.Logger.Level.INFO, "Support Triage Message is empty.");
             return response(
                     "Message is required for message turns.",
                     ResponseStatus.ERROR,
@@ -52,16 +57,19 @@ public class SupportTriageService {
             );
         }
 
+        logger.log(System.Logger.Level.INFO, "Going as usual.");
         String memoryId = ThreadConversationId.from(request.threadId(), request.userId());
         try (var ignored = ToolExecutionContextHolder.open(
                 new ToolExecutionContext(request.threadId(), request.userId(), memoryId)
         )) {
+            logger.log(System.Logger.Level.INFO, "Support Triage Memory ID: " + memoryId);
             return response(
                     assistant.chat(memoryId, request.message()),
                     ResponseStatus.COMPLETED,
                     request
             );
         } catch (ConfirmationRequiredException exception) {
+            logger.log(System.Logger.Level.ERROR, "Confirmation required.", exception);
             PendingAction pendingAction = exception.pendingAction();
             return new AgentResponse(
                     exception.getMessage(),
