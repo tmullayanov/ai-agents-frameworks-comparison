@@ -36,8 +36,9 @@ public class SupportTriageService {
             );
         }
 
+        String memoryId = ThreadConversationId.from(request.threadId(), request.userId());
         return response(
-                assistant.chat(request.message()),
+                assistant.chat(memoryId, request.message()),
                 ResponseStatus.COMPLETED,
                 request
         );

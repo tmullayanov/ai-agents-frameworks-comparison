@@ -12,7 +12,7 @@ class SupportTriageServiceTests {
 
     @Test
     void messageTurnReturnsAssistantResponse() {
-        SupportTriageService service = new SupportTriageService(userMessage -> "triage: " + userMessage);
+        SupportTriageService service = new SupportTriageService((memoryId, userMessage) -> "triage: " + userMessage);
 
         var response = service.run(new AgentRequest("thread-1", "user-1", "Disk is full", null));
 
@@ -29,7 +29,7 @@ class SupportTriageServiceTests {
 
     @Test
     void emptyMessageTurnReturnsErrorWithoutCallingAssistant() {
-        SupportTriageService service = new SupportTriageService(userMessage -> {
+        SupportTriageService service = new SupportTriageService((memoryId, userMessage) -> {
             throw new AssertionError("assistant should not be called");
         });
 
@@ -43,7 +43,7 @@ class SupportTriageServiceTests {
 
     @Test
     void decisionTurnReturnsNotImplementedErrorWithoutCallingAssistant() {
-        SupportTriageService service = new SupportTriageService(userMessage -> {
+        SupportTriageService service = new SupportTriageService((memoryId, userMessage) -> {
             throw new AssertionError("assistant should not be called");
         });
 

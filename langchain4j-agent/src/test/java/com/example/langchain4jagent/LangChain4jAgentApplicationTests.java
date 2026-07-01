@@ -18,7 +18,7 @@ class LangChain4jAgentApplicationTests {
 
         @Bean
         SupportTriageAssistant supportTriageAssistant() {
-            return userMessage -> "test assistant response";
+            return (memoryId, userMessage) -> "test assistant response";
         }
     }
 }
