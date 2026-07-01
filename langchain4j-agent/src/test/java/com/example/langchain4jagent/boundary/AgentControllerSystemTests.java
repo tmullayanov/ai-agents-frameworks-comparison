@@ -95,7 +95,7 @@ class AgentControllerSystemTests {
     }
 
     @Test
-    void decisionTurnReturnsCurrentNotImplementedBehaviorWithoutCallingAssistant() throws Exception {
+    void decisionTurnWithUnknownConfirmationReturnsErrorWithoutCallingAssistant() throws Exception {
         mockMvc.perform(post("/api/agent/turns")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
@@ -107,9 +107,9 @@ class AgentControllerSystemTests {
                                     "type": "APPROVE"
                                   }
                                 }
-                                """))
+                """))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.message").value("Decision turns are not implemented yet."))
+                .andExpect(jsonPath("$.message").value("Pending confirmation was not found."))
                 .andExpect(jsonPath("$.status").value("ERROR"))
                 .andExpect(jsonPath("$.pending_confirmation").value(nullValue()))
                 .andExpect(jsonPath("$.trace.thread_id").value("thread-1"))

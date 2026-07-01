@@ -21,4 +21,13 @@ public class InMemoryApprovalStore implements ApprovalStore {
     public Optional<PendingAction> find(String confirmationId) {
         return Optional.ofNullable(actions.get(confirmationId));
     }
+
+    @Override
+    public Optional<PendingAction> take(String threadId, String userId, String confirmationId) {
+        PendingAction action = actions.get(confirmationId);
+        if (action == null || !action.threadId().equals(threadId) || !action.userId().equals(userId)) {
+            return Optional.empty();
+        }
+        return actions.remove(confirmationId, action) ? Optional.of(action) : Optional.empty();
+    }
 }

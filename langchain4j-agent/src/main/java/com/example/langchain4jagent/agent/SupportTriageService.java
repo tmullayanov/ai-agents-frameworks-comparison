@@ -3,11 +3,13 @@ package com.example.langchain4jagent.agent;
 import com.example.langchain4jagent.agent.dto.AgentRequest;
 import com.example.langchain4jagent.agent.dto.AgentResponse;
 import com.example.langchain4jagent.agent.dto.AgentStructuredOutput;
+import com.example.langchain4jagent.agent.dto.ConfirmationDecisionType;
 import com.example.langchain4jagent.agent.dto.ExecutionTrace;
 import com.example.langchain4jagent.agent.dto.ResponseStatus;
 import com.example.langchain4jagent.agent.dto.ToolCallTrace;
 import com.example.langchain4jagent.tools.ToolExecutionContext;
 import com.example.langchain4jagent.tools.ToolExecutionContextHolder;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import java.util.List;
@@ -17,18 +19,29 @@ import java.util.UUID;
 public class SupportTriageService {
 
     private final SupportTriageAssistant assistant;
+    private final ApprovalStore approvalStore;
+    private final PendingActionExecutor pendingActionExecutor;
 
-    public SupportTriageService(SupportTriageAssistant assistant) {
+    @Autowired
+    public SupportTriageService(
+            SupportTriageAssistant assistant,
+            ApprovalStore approvalStore,
+            PendingActionExecutor pendingActionExecutor
+    ) {
         this.assistant = assistant;
+        this.approvalStore = approvalStore;
+        this.pendingActionExecutor = pendingActionExecutor;
+    }
+
+    SupportTriageService(SupportTriageAssistant assistant) {
+        this(assistant, new InMemoryApprovalStore(), action -> {
+            throw new IllegalStateException("Pending action execution is not configured.");
+        });
     }
 
     public AgentResponse run(AgentRequest request) {
         if (request.decision() != null) {
-            return response(
-                    "Decision turns are not implemented yet.",
-                    ResponseStatus.ERROR,
-                    request
-            );
+            return handleDecisionTurn(request);
         }
 
         if (request.message() == null || request.message().isBlank()) {
@@ -72,21 +85,108 @@ public class SupportTriageService {
         }
     }
 
+    private AgentResponse handleDecisionTurn(AgentRequest request) {
+        PendingAction pendingAction = approvalStore
+                .find(request.decision().confirmationId())
+                .filter(pending -> pending.threadId().equals(request.threadId()))
+                .filter(pending -> pending.userId().equals(request.userId()))
+                .orElse(null);
+        if (pendingAction == null) {
+            return response(
+                    "Pending confirmation was not found.",
+                    ResponseStatus.ERROR,
+                    request
+            );
+        }
+
+        if (request.decision().type() == ConfirmationDecisionType.REJECT) {
+            approvalStore.take(request.threadId(), request.userId(), pendingAction.confirmationId());
+            return new AgentResponse(
+                    "Confirmation rejected. No side effect was executed.",
+                    ResponseStatus.REJECTED,
+                    null,
+                    AgentStructuredOutput.empty(),
+                    trace(request, List.of(toolTrace(pendingAction, "rejected")), false, null, ResponseStatus.REJECTED)
+            );
+        }
+
+        String toolResult;
+        try (var ignored = ToolExecutionContextHolder.open(
+                new ToolExecutionContext(
+                        request.threadId(),
+                        request.userId(),
+                        pendingAction.memoryId(),
+                        pendingAction.confirmationId()
+                )
+        )) {
+            toolResult = pendingActionExecutor.execute(pendingAction);
+        }
+        approvalStore.take(request.threadId(), request.userId(), pendingAction.confirmationId());
+
+        String finalAnswer;
+        try (var ignored = ToolExecutionContextHolder.open(
+                new ToolExecutionContext(request.threadId(), request.userId(), pendingAction.memoryId())
+        )) {
+            finalAnswer = assistant.chat(pendingAction.memoryId(), approvedToolResultMessage(pendingAction, toolResult));
+        }
+
+        return new AgentResponse(
+                finalAnswer,
+                ResponseStatus.COMPLETED,
+                null,
+                AgentStructuredOutput.empty(),
+                trace(request, List.of(toolTrace(pendingAction, "approved_executed")), false, null, ResponseStatus.COMPLETED)
+        );
+    }
+
     private AgentResponse response(String message, ResponseStatus status, AgentRequest request) {
         return new AgentResponse(
                 message,
                 status,
                 null,
                 AgentStructuredOutput.empty(),
-                new ExecutionTrace(
-                        "run-" + UUID.randomUUID(),
-                        request.threadId(),
-                        request.userId(),
-                        List.of(),
-                        false,
-                        null,
-                        status
-                )
+                trace(request, List.of(), false, null, status)
         );
+    }
+
+    private ExecutionTrace trace(
+            AgentRequest request,
+            List<ToolCallTrace> toolCalls,
+            boolean confirmationRequired,
+            String pendingConfirmationId,
+            ResponseStatus finalStatus
+    ) {
+        return new ExecutionTrace(
+                "run-" + UUID.randomUUID(),
+                request.threadId(),
+                request.userId(),
+                toolCalls,
+                confirmationRequired,
+                pendingConfirmationId,
+                finalStatus
+        );
+    }
+
+    private ToolCallTrace toolTrace(PendingAction pendingAction, String status) {
+        return new ToolCallTrace(
+                pendingAction.actionName(),
+                status,
+                pendingAction.toolCallId()
+        );
+    }
+
+    private String approvedToolResultMessage(PendingAction pendingAction, String toolResult) {
+        return """
+                The human approved the previously pending action `%s`.
+                The application has now executed that action.
+
+                Tool arguments:
+                %s
+
+                Tool result:
+                %s
+
+                Give the user a concise final answer. Mention the created ticket id if present.
+                """.formatted(pendingAction.actionName(), pendingAction.actionArgs(), toolResult);
     }
 }

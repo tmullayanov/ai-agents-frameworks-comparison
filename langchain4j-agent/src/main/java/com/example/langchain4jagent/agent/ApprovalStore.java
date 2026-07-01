@@ -7,4 +7,6 @@ public interface ApprovalStore {
     PendingAction save(PendingAction action);
 
     Optional<PendingAction> find(String confirmationId);
+
+    Optional<PendingAction> take(String threadId, String userId, String confirmationId);
 }

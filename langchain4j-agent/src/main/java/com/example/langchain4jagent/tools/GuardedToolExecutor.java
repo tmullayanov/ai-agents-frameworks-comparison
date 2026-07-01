@@ -55,6 +55,10 @@ public final class GuardedToolExecutor implements ToolExecutor {
 
         ToolExecutionContext context = ToolExecutionContextHolder.current()
                 .orElse(new ToolExecutionContext("unknown", "unknown", String.valueOf(memoryId)));
+        if (hasMatchingApproval(context, request)) {
+            return;
+        }
+
         PendingAction action = approvalStore.save(new PendingAction(
                 "confirmation-" + UUID.randomUUID(),
                 context.threadId(),
@@ -65,6 +69,20 @@ public final class GuardedToolExecutor implements ToolExecutor {
                 request.id()
         ));
         throw new ConfirmationRequiredException(action);
+    }
+
+    private boolean hasMatchingApproval(ToolExecutionContext context, ToolExecutionRequest request) {
+        if (context.approvedConfirmationId() == null || context.approvedConfirmationId().isBlank()) {
+            return false;
+        }
+        Map<String, Object> actionArgs = parseArguments(request.arguments());
+        return approvalStore
+                .find(context.approvedConfirmationId())
+                .filter(pending -> pending.threadId().equals(context.threadId()))
+                .filter(pending -> pending.userId().equals(context.userId()))
+                .filter(pending -> pending.actionName().equals(request.name()))
+                .filter(pending -> pending.actionArgs().equals(actionArgs))
+                .isPresent();
     }
 
     private Map<String, Object> parseArguments(String arguments) {

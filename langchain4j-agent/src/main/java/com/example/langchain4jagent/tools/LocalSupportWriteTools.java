@@ -1,17 +1,11 @@
 package com.example.langchain4jagent.tools;
 
-import com.example.langchain4jagent.agent.ApprovalStore;
-import com.example.langchain4jagent.agent.ConfirmationRequiredException;
-import com.example.langchain4jagent.agent.PendingAction;
-import com.example.langchain4jagent.agent.ToolPolicy;
 import dev.langchain4j.agent.tool.P;
 import dev.langchain4j.agent.tool.Tool;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnExpression;
 import org.springframework.stereotype.Component;
 
 import java.util.Map;
-import java.util.UUID;
 
 @Component
 @ConditionalOnExpression("'${agent.tools.backend:${USE_LOCAL_TOOLS:local}}' == 'local' "
@@ -19,19 +13,10 @@ import java.util.UUID;
 public class LocalSupportWriteTools {
 
     private final LocalSupportToolStore store;
-    private final ApprovalStore approvalStore;
-    private final ToolPolicy toolPolicy;
     private final System.Logger logger = System.getLogger(LocalSupportWriteTools.class.getName());
 
     public LocalSupportWriteTools(LocalSupportToolStore store) {
-        this(store, null, new ToolPolicy());
-    }
-
-    @Autowired
-    public LocalSupportWriteTools(LocalSupportToolStore store, ApprovalStore approvalStore, ToolPolicy toolPolicy) {
         this.store = store;
-        this.approvalStore = approvalStore;
-        this.toolPolicy = toolPolicy;
     }
 
     @Tool(name = "create_incident_ticket", value = "Create a fake incident ticket after explicit user confirmation.")
@@ -42,12 +27,6 @@ public class LocalSupportWriteTools {
             @P(name = "metadata", description = "Optional incident metadata.", required = false) Map<String, Object> metadata
     ) {
         logger.log(System.Logger.Level.INFO, "LocalSupportWriteTools createIncidentTicket");
-        requireConfirmation("create_incident_ticket", LocalSupportToolStore.mapOf(
-                "title", title,
-                "severity", severity,
-                "description", description,
-                "metadata", metadata == null ? Map.of() : metadata
-        ));
         String ticketId = "INC-FAKE-%04d".formatted(store.createdTicketCount() + 1);
         logger.log(System.Logger.Level.INFO, "create ticket with ticketId = " + ticketId);
         return store.addTicket(LocalSupportToolStore.mapOf(
@@ -81,23 +60,5 @@ public class LocalSupportWriteTools {
                 "confidence", confidence,
                 "ttl_days", ttlDays
         ));
-    }
-
-    private void requireConfirmation(String actionName, Map<String, Object> actionArgs) {
-        if (approvalStore == null || !toolPolicy.requiresConfirmation(actionName)) {
-            return;
-        }
-        ToolExecutionContext context = ToolExecutionContextHolder.current()
-                .orElse(new ToolExecutionContext("unknown", "unknown", "unknown"));
-        PendingAction action = approvalStore.save(new PendingAction(
-                "confirmation-" + UUID.randomUUID(),
-                context.threadId(),
-                context.userId(),
-                context.memoryId(),
-                actionName,
-                actionArgs,
-                null
-        ));
-        throw new ConfirmationRequiredException(action);
     }
 }
