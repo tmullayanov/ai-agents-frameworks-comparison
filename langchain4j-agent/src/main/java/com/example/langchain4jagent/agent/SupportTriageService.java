@@ -5,6 +5,9 @@ import com.example.langchain4jagent.agent.dto.AgentResponse;
 import com.example.langchain4jagent.agent.dto.AgentStructuredOutput;
 import com.example.langchain4jagent.agent.dto.ExecutionTrace;
 import com.example.langchain4jagent.agent.dto.ResponseStatus;
+import com.example.langchain4jagent.agent.dto.ToolCallTrace;
+import com.example.langchain4jagent.tools.ToolExecutionContext;
+import com.example.langchain4jagent.tools.ToolExecutionContextHolder;
 import org.springframework.stereotype.Service;
 
 import java.util.List;
@@ -37,11 +40,36 @@ public class SupportTriageService {
         }
 
         String memoryId = ThreadConversationId.from(request.threadId(), request.userId());
-        return response(
-                assistant.chat(memoryId, request.message()),
-                ResponseStatus.COMPLETED,
-                request
-        );
+        try (var ignored = ToolExecutionContextHolder.open(
+                new ToolExecutionContext(request.threadId(), request.userId(), memoryId)
+        )) {
+            return response(
+                    assistant.chat(memoryId, request.message()),
+                    ResponseStatus.COMPLETED,
+                    request
+            );
+        } catch (ConfirmationRequiredException exception) {
+            PendingAction pendingAction = exception.pendingAction();
+            return new AgentResponse(
+                    exception.getMessage(),
+                    ResponseStatus.CONFIRMATION_REQUIRED,
+                    pendingAction.toPendingConfirmation(),
+                    AgentStructuredOutput.empty(),
+                    new ExecutionTrace(
+                            "run-" + UUID.randomUUID(),
+                            request.threadId(),
+                            request.userId(),
+                            List.of(new ToolCallTrace(
+                                    pendingAction.actionName(),
+                                    "confirmation_required",
+                                    pendingAction.toolCallId()
+                            )),
+                            true,
+                            pendingAction.confirmationId(),
+                            ResponseStatus.CONFIRMATION_REQUIRED
+                    )
+            );
+        }
     }
 
     private AgentResponse response(String message, ResponseStatus status, AgentRequest request) {

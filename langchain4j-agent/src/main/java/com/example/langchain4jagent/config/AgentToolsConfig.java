@@ -1,5 +1,9 @@
 package com.example.langchain4jagent.config;
 
+import com.example.langchain4jagent.agent.ApprovalStore;
+import com.example.langchain4jagent.agent.ToolPolicy;
+import com.example.langchain4jagent.tools.GuardedToolExecutor;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import dev.langchain4j.mcp.McpToolProvider;
 import dev.langchain4j.mcp.client.DefaultMcpClient;
 import dev.langchain4j.mcp.client.McpClient;
@@ -41,11 +45,21 @@ public class AgentToolsConfig {
     @Bean("agentToolProvider")
     @ConditionalOnExpression("'${agent.tools.backend:${USE_LOCAL_TOOLS:local}}' == 'mcp' "
             + "|| '${agent.tools.backend:${USE_LOCAL_TOOLS:local}}' == 'false'")
-    ToolProvider mcpToolProvider(McpClient supportMcpClient) {
+    ToolProvider mcpToolProvider(
+            McpClient supportMcpClient,
+            ApprovalStore approvalStore,
+            ToolPolicy toolPolicy,
+            ObjectMapper objectMapper
+    ) {
         return McpToolProvider.builder()
                 .mcpClients(supportMcpClient)
                 .failIfOneServerFails(true)
-                .toolWrapper(LoggingToolExecutor::new)
+                .toolWrapper(delegate -> new GuardedToolExecutor(
+                        new LoggingToolExecutor(delegate),
+                        approvalStore,
+                        toolPolicy,
+                        objectMapper
+                ))
                 .build();
     }
 
