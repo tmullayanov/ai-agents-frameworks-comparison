@@ -8,7 +8,8 @@ import org.springframework.context.annotation.Bean;
 
 @SpringBootTest(properties = {
         "spring.autoconfigure.exclude=dev.langchain4j.spring.LangChain4jAutoConfiguration",
-        "agent.tools.backend=local"
+        "agent.tools.backend=local",
+        "agent.assistant.enabled=false"
 })
 class LangChain4jAgentApplicationTests {
 
