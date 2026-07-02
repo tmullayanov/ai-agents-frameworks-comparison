@@ -1,6 +1,8 @@
 package com.example.langchain4jagent.boundary;
 
+import com.example.langchain4jagent.agent.DiagnosticSummaryExtractor;
 import com.example.langchain4jagent.agent.SupportTriageAssistant;
+import com.example.langchain4jagent.agent.dto.DiagnosticSummary;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -8,6 +10,7 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Primary;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
 
@@ -56,7 +59,10 @@ class AgentControllerSystemTests {
                 .andExpect(jsonPath("$.message").value("triage: Disk is full"))
                 .andExpect(jsonPath("$.status").value("COMPLETED"))
                 .andExpect(jsonPath("$.pending_confirmation").value(nullValue()))
-                .andExpect(jsonPath("$.structured_output.diagnostic_summary").value(nullValue()))
+                .andExpect(jsonPath("$.structured_output.diagnostic_summary.service").value("ops-box"))
+                .andExpect(jsonPath("$.structured_output.diagnostic_summary.symptoms[0]").value("Disk is full"))
+                .andExpect(jsonPath("$.structured_output.diagnostic_summary.severity_guess").value(nullValue()))
+                .andExpect(jsonPath("$.structured_output.diagnostic_summary.requires_confirmation").value(false))
                 .andExpect(jsonPath("$.structured_output.proposed_ticket").value(nullValue()))
                 .andExpect(jsonPath("$.trace.run_id", not(nullValue())))
                 .andExpect(jsonPath("$.trace.thread_id").value("thread-1"))
@@ -181,6 +187,17 @@ class AgentControllerSystemTests {
         @Bean
         RecordingSupportTriageAssistant supportTriageAssistant() {
             return new RecordingSupportTriageAssistant();
+        }
+
+        @Bean
+        @Primary
+        DiagnosticSummaryExtractor testDiagnosticSummaryExtractor() {
+            return (userMessage, finalAnswer) -> new DiagnosticSummary(
+                    "ops-box",
+                    List.of(userMessage),
+                    null,
+                    false
+            );
         }
     }
 

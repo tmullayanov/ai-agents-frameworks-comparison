@@ -1,5 +1,6 @@
 package com.example.langchain4jagent.agent.dto;
 
+import java.io.Serializable;
 import java.util.Map;
 
 public record IncidentTicketPayload(
@@ -7,5 +8,5 @@ public record IncidentTicketPayload(
         String severity,
         String description,
         Map<String, Object> metadata
-) {
+) implements Serializable {
 }

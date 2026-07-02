@@ -2,6 +2,8 @@ package com.example.langchain4jagent.agent.dto;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
 
+import java.io.Serializable;
+
 public record AgentResponse(
         String message,
         ResponseStatus status,
@@ -13,5 +15,5 @@ public record AgentResponse(
         AgentStructuredOutput structuredOutput,
 
         ExecutionTrace trace
-) {
+) implements Serializable {
 }

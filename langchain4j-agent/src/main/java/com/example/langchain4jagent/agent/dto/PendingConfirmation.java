@@ -2,6 +2,7 @@ package com.example.langchain4jagent.agent.dto;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
 
+import java.io.Serializable;
 import java.util.Map;
 
 public record PendingConfirmation(
@@ -13,5 +14,5 @@ public record PendingConfirmation(
 
         @JsonProperty("action_args")
         Map<String, Object> actionArgs
-) {
+) implements Serializable {
 }

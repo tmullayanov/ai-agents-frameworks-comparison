@@ -10,6 +10,7 @@ description = 'langchain4j-agent'
 
 ext {
     langchain4jVersion = '1.17.0-beta27'
+    langgraph4jVersion = '1.8.20'
 }
 
 java {
@@ -28,6 +29,7 @@ dependencies {
     implementation "dev.langchain4j:langchain4j-spring-boot4-starter:${langchain4jVersion}"
     implementation "dev.langchain4j:langchain4j-open-ai-spring-boot4-starter:${langchain4jVersion}"
     implementation "dev.langchain4j:langchain4j-mcp:${langchain4jVersion}"
+    implementation "org.bsc.langgraph4j:langgraph4j-core:${langgraph4jVersion}"
 
     testImplementation 'org.springframework.boot:spring-boot-starter-webmvc-test'
     testRuntimeOnly 'org.junit.platform:junit-platform-launcher'

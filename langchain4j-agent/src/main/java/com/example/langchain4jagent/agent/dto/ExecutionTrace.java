@@ -2,6 +2,7 @@ package com.example.langchain4jagent.agent.dto;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
 
+import java.io.Serializable;
 import java.util.List;
 
 public record ExecutionTrace(
@@ -25,7 +26,7 @@ public record ExecutionTrace(
 
         @JsonProperty("final_status")
         ResponseStatus finalStatus
-) {
+) implements Serializable {
     public ExecutionTrace {
         toolCalls = toolCalls == null ? List.of() : List.copyOf(toolCalls);
     }

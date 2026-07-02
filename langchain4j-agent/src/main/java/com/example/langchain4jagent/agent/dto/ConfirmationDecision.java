@@ -4,6 +4,8 @@ import com.fasterxml.jackson.annotation.JsonProperty;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 
+import java.io.Serializable;
+
 public record ConfirmationDecision(
         @JsonProperty("confirmation_id")
         @NotBlank
@@ -11,5 +13,5 @@ public record ConfirmationDecision(
 
         @NotNull
         ConfirmationDecisionType type
-) {
+) implements Serializable {
 }

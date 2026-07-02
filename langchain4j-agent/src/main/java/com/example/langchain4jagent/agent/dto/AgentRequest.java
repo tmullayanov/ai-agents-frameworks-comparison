@@ -4,6 +4,8 @@ import com.fasterxml.jackson.annotation.JsonProperty;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 
+import java.io.Serializable;
+
 public record AgentRequest(
         @JsonProperty("thread_id")
         @NotBlank
@@ -17,5 +19,5 @@ public record AgentRequest(
 
         @Valid
         ConfirmationDecision decision
-) {
+) implements Serializable {
 }
