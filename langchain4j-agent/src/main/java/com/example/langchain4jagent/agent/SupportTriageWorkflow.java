@@ -158,17 +158,23 @@ public class SupportTriageWorkflow {
     private Map<String, Object> messageTriage(WorkflowState state) {
         AgentRequest request = state.request();
         String memoryId = ThreadConversationId.from(request.threadId(), request.userId());
-        try (var ignored = ToolExecutionContextHolder.open(
+        ExecutionTraceRecorder.Scope traceScope = ExecutionTraceRecorder.open();
+        try (traceScope; var ignored = ToolExecutionContextHolder.open(
                 new ToolExecutionContext(request.threadId(), request.userId(), memoryId)
         )) {
             String answer = assistant.chat(memoryId, request.message());
             return Map.of(
-                    RESPONSE, response(answer, ResponseStatus.COMPLETED, request),
+                    RESPONSE, response(answer, ResponseStatus.COMPLETED, request, traceScope.snapshot()),
                     CONVERSATION, messageTurnConversation(request.message(), answer)
             );
         } catch (ConfirmationRequiredException exception) {
             PendingAction pendingAction = exception.pendingAction();
-            return Map.of(RESPONSE, confirmationRequiredResponse(exception, pendingAction, request));
+            return Map.of(RESPONSE, confirmationRequiredResponse(
+                    exception,
+                    pendingAction,
+                    request,
+                    traceScope.snapshot()
+            ));
         }
     }
 
@@ -184,7 +190,8 @@ public class SupportTriageWorkflow {
         }
 
         String toolResult;
-        try (var ignored = ToolExecutionContextHolder.open(
+        ExecutionTraceRecorder.Scope traceScope = ExecutionTraceRecorder.open();
+        try (traceScope; var ignored = ToolExecutionContextHolder.open(
                 new ToolExecutionContext(
                         request.threadId(),
                         request.userId(),
@@ -204,7 +211,13 @@ public class SupportTriageWorkflow {
                         ResponseStatus.COMPLETED,
                         null,
                         AgentStructuredOutput.empty(),
-                        trace(request, List.of(toolTrace(pendingAction, "approved_executed")), false, null, ResponseStatus.COMPLETED)
+                        trace(
+                                request,
+                                toolCallsOrFallback(traceScope.snapshot(), pendingAction, "approved_executed"),
+                                false,
+                                null,
+                                ResponseStatus.COMPLETED
+                        )
                 )
         );
     }
@@ -227,7 +240,7 @@ public class SupportTriageWorkflow {
                         ResponseStatus.COMPLETED,
                         null,
                         AgentStructuredOutput.empty(),
-                        trace(request, List.of(toolTrace(pendingAction, "approved_executed")), false, null, ResponseStatus.COMPLETED)
+                        trace(request, state.response().trace().toolCalls(), false, null, ResponseStatus.COMPLETED)
                 ),
                 CONVERSATION, approvedActionConversation(pendingAction, toolResult, finalAnswer)
         );
@@ -279,7 +292,8 @@ public class SupportTriageWorkflow {
     private AgentResponse confirmationRequiredResponse(
             ConfirmationRequiredException exception,
             PendingAction pendingAction,
-            AgentRequest request
+            AgentRequest request,
+            List<ToolCallTrace> toolCalls
     ) {
         return new AgentResponse(
                 exception.getMessage(),
@@ -290,11 +304,7 @@ public class SupportTriageWorkflow {
                         "run-" + UUID.randomUUID(),
                         request.threadId(),
                         request.userId(),
-                        List.of(new ToolCallTrace(
-                                pendingAction.actionName(),
-                                "confirmation_required",
-                                pendingAction.toolCallId()
-                        )),
+                        toolCallsOrFallback(toolCalls, pendingAction, "confirmation_required"),
                         true,
                         pendingAction.confirmationId(),
                         ResponseStatus.CONFIRMATION_REQUIRED
@@ -303,12 +313,21 @@ public class SupportTriageWorkflow {
     }
 
     private AgentResponse response(String message, ResponseStatus status, AgentRequest request) {
+        return response(message, status, request, List.of());
+    }
+
+    private AgentResponse response(
+            String message,
+            ResponseStatus status,
+            AgentRequest request,
+            List<ToolCallTrace> toolCalls
+    ) {
         return new AgentResponse(
                 message,
                 status,
                 null,
                 AgentStructuredOutput.empty(),
-                trace(request, List.of(), false, null, status)
+                trace(request, toolCalls, false, null, status)
         );
     }
 
@@ -346,6 +365,14 @@ public class SupportTriageWorkflow {
                 status,
                 pendingAction.toolCallId()
         );
+    }
+
+    private List<ToolCallTrace> toolCallsOrFallback(
+            List<ToolCallTrace> toolCalls,
+            PendingAction pendingAction,
+            String status
+    ) {
+        return toolCalls.isEmpty() ? List.of(toolTrace(pendingAction, status)) : toolCalls;
     }
 
     private String approvedToolResultMessage(PendingAction pendingAction, String toolResult) {

@@ -94,11 +94,13 @@ public class AgentToolsConfig {
         ToolProvider provider = McpToolProvider.builder()
                 .mcpClients(supportMcpClient)
                 .failIfOneServerFails(true)
-                .toolWrapper(delegate -> new GuardedToolExecutor(
-                        new LoggingToolExecutor(delegate),
-                        approvalStore,
-                        toolPolicy,
-                        objectMapper
+                .toolWrapper(delegate -> new TracingToolExecutor(
+                        new GuardedToolExecutor(
+                                new LoggingToolExecutor(delegate),
+                                approvalStore,
+                                toolPolicy,
+                                objectMapper
+                        )
                 ))
                 .build();
         return new RegistryBackedToolProvider(provider, registry);
@@ -119,11 +121,13 @@ public class AgentToolsConfig {
                 var specification = ToolSpecifications.toolSpecificationFrom(method);
                 tools.add(AiServiceTool.builder()
                         .toolSpecification(specification)
-                        .toolExecutor(new GuardedToolExecutor(
-                                new DefaultToolExecutor(toolObject, method),
-                                approvalStore,
-                                toolPolicy,
-                                objectMapper
+                        .toolExecutor(new TracingToolExecutor(
+                                new GuardedToolExecutor(
+                                        new DefaultToolExecutor(toolObject, method),
+                                        approvalStore,
+                                        toolPolicy,
+                                        objectMapper
+                                )
                         ))
                         .build());
             }
