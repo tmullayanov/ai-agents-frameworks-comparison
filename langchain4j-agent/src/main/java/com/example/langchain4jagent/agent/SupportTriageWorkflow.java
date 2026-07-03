@@ -42,6 +42,7 @@ public class SupportTriageWorkflow {
     private static final String RESPONSE = "response";
     private static final String PENDING_ACTION = "pendingAction";
     private static final String TOOL_RESULT = "toolResult";
+    private static final String CONVERSATION = "conversation";
 
     private final SupportTriageAssistant assistant;
     private final ApprovalStore approvalStore;
@@ -70,7 +71,7 @@ public class SupportTriageWorkflow {
             ApprovalStore approvalStore,
             PendingActionExecutor pendingActionExecutor
     ) {
-        this(assistant, approvalStore, pendingActionExecutor, (userMessage, finalAnswer) -> null);
+        this(assistant, approvalStore, pendingActionExecutor, (conversation, finalAnswer) -> null);
     }
 
     SupportTriageWorkflow(
@@ -161,7 +162,10 @@ public class SupportTriageWorkflow {
                 new ToolExecutionContext(request.threadId(), request.userId(), memoryId)
         )) {
             String answer = assistant.chat(memoryId, request.message());
-            return Map.of(RESPONSE, response(answer, ResponseStatus.COMPLETED, request));
+            return Map.of(
+                    RESPONSE, response(answer, ResponseStatus.COMPLETED, request),
+                    CONVERSATION, messageTurnConversation(request.message(), answer)
+            );
         } catch (ConfirmationRequiredException exception) {
             PendingAction pendingAction = exception.pendingAction();
             return Map.of(RESPONSE, confirmationRequiredResponse(exception, pendingAction, request));
@@ -217,13 +221,16 @@ public class SupportTriageWorkflow {
             finalAnswer = assistant.chat(pendingAction.memoryId(), approvedToolResultMessage(pendingAction, toolResult));
         }
 
-        return Map.of(RESPONSE, new AgentResponse(
-                finalAnswer,
-                ResponseStatus.COMPLETED,
-                null,
-                AgentStructuredOutput.empty(),
-                trace(request, List.of(toolTrace(pendingAction, "approved_executed")), false, null, ResponseStatus.COMPLETED)
-        ));
+        return Map.of(
+                RESPONSE, new AgentResponse(
+                        finalAnswer,
+                        ResponseStatus.COMPLETED,
+                        null,
+                        AgentStructuredOutput.empty(),
+                        trace(request, List.of(toolTrace(pendingAction, "approved_executed")), false, null, ResponseStatus.COMPLETED)
+                ),
+                CONVERSATION, approvedActionConversation(pendingAction, toolResult, finalAnswer)
+        );
     }
 
     private Map<String, Object> reject(WorkflowState state) {
@@ -252,7 +259,7 @@ public class SupportTriageWorkflow {
         DiagnosticSummary diagnosticSummary = null;
         try {
             diagnosticSummary = diagnosticSummaryExtractor.extract(
-                    state.request().message() == null ? "" : state.request().message(),
+                    state.conversation(),
                     current.message()
             );
         } catch (RuntimeException exception) {
@@ -356,6 +363,32 @@ public class SupportTriageWorkflow {
                 """.formatted(pendingAction.actionName(), pendingAction.actionArgs(), toolResult);
     }
 
+    private String messageTurnConversation(String userMessage, String finalAnswer) {
+        return """
+                User:
+                %s
+
+                Assistant:
+                %s
+                """.formatted(userMessage, finalAnswer);
+    }
+
+    private String approvedActionConversation(PendingAction pendingAction, String toolResult, String finalAnswer) {
+        return """
+                Human approved action:
+                %s
+
+                Action arguments:
+                %s
+
+                Tool result:
+                %s
+
+                Assistant:
+                %s
+                """.formatted(pendingAction.actionName(), pendingAction.actionArgs(), toolResult, finalAnswer);
+    }
+
     static class WorkflowState extends AgentState {
 
         WorkflowState(Map<String, Object> initData) {
@@ -380,6 +413,10 @@ public class SupportTriageWorkflow {
 
         String toolResult() {
             return this.<String>value(TOOL_RESULT).orElseThrow();
+        }
+
+        String conversation() {
+            return this.<String>value(CONVERSATION).orElse("");
         }
 
         private AgentResponse response(String message, ResponseStatus status, AgentRequest request) {

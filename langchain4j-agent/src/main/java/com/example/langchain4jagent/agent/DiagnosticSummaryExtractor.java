@@ -9,14 +9,14 @@ public interface DiagnosticSummaryExtractor {
 
     @SystemMessage(SupportPrompts.DIAGNOSTIC_SUMMARY_PROMPT)
     @UserMessage("""
-            User message:
-            {{userMessage}}
+            Conversation:
+            {{conversation}}
 
             Final assistant answer:
             {{finalAnswer}}
             """)
     DiagnosticSummary extract(
-            @V("userMessage") String userMessage,
+            @V("conversation") String conversation,
             @V("finalAnswer") String finalAnswer
     );
 }

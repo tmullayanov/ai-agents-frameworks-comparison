@@ -16,7 +16,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 class SupportTriageWorkflowTests {
 
     @Test
-    void completedMessageTurnInvokesSummarizeAndReturnsDiagnosticSummary() {
+    void completedMessageTurnPassesConversationSnapshotToExtractor() {
         AtomicInteger summarizeCalls = new AtomicInteger();
         SupportTriageWorkflow workflow = new SupportTriageWorkflow(
                 (memoryId, userMessage) -> "billing-api has payment_provider_timeout",
@@ -24,9 +24,13 @@ class SupportTriageWorkflowTests {
                 action -> {
                     throw new AssertionError("executor should not be called");
                 },
-                (userMessage, finalAnswer) -> {
+                (conversation, finalAnswer) -> {
                     summarizeCalls.incrementAndGet();
-                    assertThat(userMessage).isEqualTo("Investigate billing-api");
+                    assertThat(conversation)
+                            .contains("User:")
+                            .contains("Investigate billing-api")
+                            .contains("Assistant:")
+                            .contains("billing-api has payment_provider_timeout");
                     assertThat(finalAnswer).contains("billing-api");
                     return summary();
                 }
@@ -51,7 +55,7 @@ class SupportTriageWorkflowTests {
                 action -> {
                     throw new AssertionError("executor should not be called");
                 },
-                (userMessage, finalAnswer) -> {
+                (conversation, finalAnswer) -> {
                     summarizeCalls.incrementAndGet();
                     return summary();
                 }
@@ -65,7 +69,7 @@ class SupportTriageWorkflowTests {
     }
 
     @Test
-    void approveExecutesPendingActionGetsFinalAnswerAndInvokesSummarize() {
+    void approveExecutesPendingActionGetsFinalAnswerAndPassesToolResultConversationToExtractor() {
         InMemoryApprovalStore approvalStore = new InMemoryApprovalStore();
         approvalStore.save(pendingAction());
         AtomicInteger executorCalls = new AtomicInteger();
@@ -83,9 +87,17 @@ class SupportTriageWorkflowTests {
                     executorCalls.incrementAndGet();
                     return "{\"id\":\"INC-FAKE-0001\"}";
                 },
-                (userMessage, finalAnswer) -> {
+                (conversation, finalAnswer) -> {
                     summarizeCalls.incrementAndGet();
-                    assertThat(userMessage).isBlank();
+                    assertThat(conversation)
+                            .contains("Human approved action:")
+                            .contains("create_incident_ticket")
+                            .contains("Action arguments:")
+                            .contains("billing-api timeout")
+                            .contains("Tool result:")
+                            .contains("INC-FAKE-0001")
+                            .contains("Assistant:")
+                            .contains("Created ticket INC-FAKE-0001.");
                     assertThat(finalAnswer).contains("INC-FAKE-0001");
                     return summary();
                 }
@@ -117,7 +129,7 @@ class SupportTriageWorkflowTests {
                     executorCalls.incrementAndGet();
                     return "executed";
                 },
-                (userMessage, finalAnswer) -> {
+                (conversation, finalAnswer) -> {
                     summarizeCalls.incrementAndGet();
                     return summary();
                 }
@@ -145,7 +157,7 @@ class SupportTriageWorkflowTests {
                 action -> {
                     throw new AssertionError("executor should not be called");
                 },
-                (userMessage, finalAnswer) -> {
+                (conversation, finalAnswer) -> {
                     throw new IllegalStateException("bad structured output");
                 }
         );

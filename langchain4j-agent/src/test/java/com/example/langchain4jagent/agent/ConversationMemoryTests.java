@@ -2,7 +2,6 @@ package com.example.langchain4jagent.agent;
 
 import com.example.langchain4jagent.agent.dto.AgentRequest;
 import dev.langchain4j.data.message.AiMessage;
-import dev.langchain4j.data.message.ChatMessage;
 import dev.langchain4j.data.message.UserMessage;
 import dev.langchain4j.memory.chat.MessageWindowChatMemory;
 import dev.langchain4j.model.chat.ChatModel;

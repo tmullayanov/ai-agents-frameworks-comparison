@@ -39,9 +39,13 @@ class AgentControllerSystemTests {
     @Autowired
     private RecordingSupportTriageAssistant assistant;
 
+    @Autowired
+    private RecordingDiagnosticSummaryExtractor diagnosticSummaryExtractor;
+
     @BeforeEach
     void resetAssistant() {
         assistant.reset();
+        diagnosticSummaryExtractor.reset();
     }
 
     @Test
@@ -73,6 +77,13 @@ class AgentControllerSystemTests {
                 .andExpect(jsonPath("$.trace.final_status").value("COMPLETED"));
 
         assertThat(assistant.messages()).containsExactly("Disk is full");
+        assertThat(diagnosticSummaryExtractor.conversations())
+                .singleElement()
+                .satisfies(conversation -> assertThat(conversation)
+                        .contains("User:")
+                        .contains("Disk is full")
+                        .contains("Assistant:")
+                        .contains("triage: Disk is full"));
     }
 
     @Test
@@ -191,13 +202,32 @@ class AgentControllerSystemTests {
 
         @Bean
         @Primary
-        DiagnosticSummaryExtractor testDiagnosticSummaryExtractor() {
-            return (userMessage, finalAnswer) -> new DiagnosticSummary(
+        RecordingDiagnosticSummaryExtractor testDiagnosticSummaryExtractor() {
+            return new RecordingDiagnosticSummaryExtractor();
+        }
+    }
+
+    static final class RecordingDiagnosticSummaryExtractor implements DiagnosticSummaryExtractor {
+
+        private final List<String> conversations = new ArrayList<>();
+
+        @Override
+        public DiagnosticSummary extract(String conversation, String finalAnswer) {
+            conversations.add(conversation);
+            return new DiagnosticSummary(
                     "ops-box",
-                    List.of(userMessage),
+                    List.of("Disk is full"),
                     null,
                     false
             );
+        }
+
+        void reset() {
+            conversations.clear();
+        }
+
+        List<String> conversations() {
+            return List.copyOf(conversations);
         }
     }
 
