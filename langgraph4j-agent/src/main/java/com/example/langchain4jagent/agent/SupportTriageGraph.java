@@ -6,8 +6,17 @@ import com.example.langchain4jagent.agent.dto.AgentStructuredOutput;
 import com.example.langchain4jagent.agent.dto.ConfirmationDecisionType;
 import com.example.langchain4jagent.agent.dto.ExecutionTrace;
 import com.example.langchain4jagent.agent.dto.ResponseStatus;
+import com.example.langchain4jagent.agent.dto.ToolCallTrace;
+import com.example.langchain4jagent.tools.AgentToolRegistry;
+import dev.langchain4j.agent.tool.ToolExecutionRequest;
 import dev.langchain4j.data.message.AiMessage;
 import dev.langchain4j.data.message.ChatMessage;
+import dev.langchain4j.data.message.SystemMessage;
+import dev.langchain4j.data.message.ToolExecutionResultMessage;
+import dev.langchain4j.data.message.UserMessage;
+import dev.langchain4j.model.chat.ChatModel;
+import dev.langchain4j.model.chat.request.ChatRequest;
+import dev.langchain4j.model.chat.response.ChatResponse;
 import org.bsc.langgraph4j.CompileConfig;
 import org.bsc.langgraph4j.CompiledGraph;
 import org.bsc.langgraph4j.GraphStateException;
@@ -19,11 +28,17 @@ import org.bsc.langgraph4j.checkpoint.MemorySaver;
 
 import java.util.List;
 import java.util.Map;
+import java.util.ArrayList;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 
+import static com.example.langchain4jagent.agent.SupportTriageState.CONVERSATION;
+import static com.example.langchain4jagent.agent.SupportTriageState.MESSAGES;
+import static com.example.langchain4jagent.agent.SupportTriageState.PENDING_ACTION;
+import static com.example.langchain4jagent.agent.SupportTriageState.PENDING_TOOL_CALL;
 import static com.example.langchain4jagent.agent.SupportTriageState.REQUEST;
 import static com.example.langchain4jagent.agent.SupportTriageState.RESPONSE;
+import static com.example.langchain4jagent.agent.SupportTriageState.TOOL_CALLS;
 import static org.bsc.langgraph4j.StateGraph.END;
 import static org.bsc.langgraph4j.StateGraph.START;
 import static org.bsc.langgraph4j.action.AsyncNodeAction.node_async;
@@ -41,13 +56,35 @@ public class SupportTriageGraph {
     private static final String CONFIRMATION_REQUIRED = "confirmation_required";
     private static final String ERROR = "error";
 
+    private final ChatModel chatModel;
+    private final AgentToolRegistry toolRegistry;
+    private final ToolPolicy toolPolicy;
     private final CompiledGraph<SupportTriageState> graph;
 
-    public SupportTriageGraph() {
+    public SupportTriageGraph(ChatModel chatModel, AgentToolRegistry toolRegistry) {
+        this(chatModel, toolRegistry, new ToolPolicy());
+    }
+
+    public SupportTriageGraph(ChatModel chatModel, AgentToolRegistry toolRegistry, ToolPolicy toolPolicy) {
+        this.chatModel = chatModel;
+        this.toolRegistry = toolRegistry;
+        this.toolPolicy = toolPolicy;
         this.graph = compileGraph();
     }
 
-    SupportTriageGraph(CompiledGraph<SupportTriageState> graph) {
+    SupportTriageGraph(ChatModel chatModel, AgentToolRegistry toolRegistry, CompiledGraph<SupportTriageState> graph) {
+        this(chatModel, toolRegistry, new ToolPolicy(), graph);
+    }
+
+    SupportTriageGraph(
+            ChatModel chatModel,
+            AgentToolRegistry toolRegistry,
+            ToolPolicy toolPolicy,
+            CompiledGraph<SupportTriageState> graph
+    ) {
+        this.chatModel = chatModel;
+        this.toolRegistry = toolRegistry;
+        this.toolPolicy = toolPolicy;
         this.graph = graph;
     }
 
@@ -143,19 +180,73 @@ public class SupportTriageGraph {
     }
 
     private Map<String, Object> agent(SupportTriageState state) {
-        return Map.of(RESPONSE, response(
-                "LangGraph4j agent node is not implemented yet.",
-                ResponseStatus.COMPLETED,
-                state.request()
-        ));
+        AgentRequest request = state.request();
+        List<ChatMessage> messages = messagesForAgentCall(state);
+        ChatResponse chatResponse = chatModel.chat(ChatRequest.builder()
+                .messages(messages)
+                .toolSpecifications(toolRegistry.specifications())
+                .build());
+        AiMessage aiMessage = chatResponse.aiMessage();
+        List<ChatMessage> updatedMessages = append(messages, aiMessage);
+        Map<String, Object> update = new java.util.HashMap<>();
+        update.put(MESSAGES, SupportTriageState.storeMessages(updatedMessages));
+        update.put(CONVERSATION, conversation(updatedMessages));
+        if (!aiMessage.hasToolExecutionRequests()) {
+            update.put(RESPONSE, response(aiMessage.text(), ResponseStatus.COMPLETED, request, state.toolCalls()));
+        }
+        return update;
     }
 
     private Map<String, Object> toolNode(SupportTriageState state) {
-        return Map.of(RESPONSE, response(
-                "LangGraph4j tool node is not implemented yet.",
-                ResponseStatus.ERROR,
-                state.request()
-        ));
+        AgentRequest request = state.request();
+        AiMessage aiMessage = lastAiMessage(state)
+                .orElseThrow(() -> new IllegalStateException("Tool node requires a preceding AI message."));
+        List<ToolExecutionRequest> toolCalls = aiMessage.toolExecutionRequests();
+
+        for (ToolExecutionRequest toolCall : toolCalls) {
+            if (toolRegistry.executor(toolCall.name()).isEmpty()) {
+                return Map.of(RESPONSE, response(
+                        "Unknown tool requested: %s.".formatted(toolCall.name()),
+                        ResponseStatus.ERROR,
+                        request,
+                        state.toolCalls()
+                ));
+            }
+        }
+
+        String memoryId = memoryId(request);
+        List<ToolCallTrace> traces = new ArrayList<>(state.toolCalls());
+        List<ChatMessage> updatedMessages = new ArrayList<>(state.messages());
+        for (ToolExecutionRequest toolCall : toolCalls) {
+            if (toolPolicy.requiresConfirmation(toolCall.name())) {
+                PendingAction pendingAction = toolRegistry.pendingAction(
+                        toolCall,
+                        request.threadId(),
+                        request.userId(),
+                        memoryId
+                );
+                traces.add(toolTrace(pendingAction, CONFIRMATION_REQUIRED));
+
+                Map<String, Object> update = new java.util.HashMap<>();
+                update.put(PENDING_ACTION, pendingAction);
+                update.put(PENDING_TOOL_CALL, SupportTriageState.StoredToolCall.from(toolCall));
+                update.put(TOOL_CALLS, List.copyOf(traces));
+                update.put(MESSAGES, SupportTriageState.storeMessages(updatedMessages));
+                update.put(CONVERSATION, conversation(updatedMessages));
+                update.put(RESPONSE, confirmationRequiredResponse(pendingAction, request, traces));
+                return update;
+            }
+
+            String result = toolRegistry.execute(toolCall, memoryId);
+            updatedMessages.add(ToolExecutionResultMessage.from(toolCall, result));
+            traces.add(new ToolCallTrace(toolCall.name(), TOOLS_EXECUTED, toolCall.id()));
+        }
+
+        Map<String, Object> update = new java.util.HashMap<>();
+        update.put(MESSAGES, SupportTriageState.storeMessages(updatedMessages));
+        update.put(TOOL_CALLS, List.copyOf(traces));
+        update.put(RESPONSE, response("", ResponseStatus.COMPLETED, request, traces));
+        return update;
     }
 
     private Map<String, Object> executeApprovedTool(SupportTriageState state) {
@@ -179,6 +270,15 @@ public class SupportTriageGraph {
     }
 
     private AgentResponse response(String message, ResponseStatus status, AgentRequest request) {
+        return response(message, status, request, List.of());
+    }
+
+    private AgentResponse response(
+            String message,
+            ResponseStatus status,
+            AgentRequest request,
+            List<ToolCallTrace> toolCalls
+    ) {
         String threadId = request == null ? "" : request.threadId();
         String userId = request == null ? "" : request.userId();
         return new AgentResponse(
@@ -190,12 +290,38 @@ public class SupportTriageGraph {
                         "run-" + UUID.randomUUID(),
                         threadId,
                         userId,
-                        List.of(),
+                        toolCalls,
                         false,
                         null,
                         status
                 )
         );
+    }
+
+    private AgentResponse confirmationRequiredResponse(
+            PendingAction pendingAction,
+            AgentRequest request,
+            List<ToolCallTrace> toolCalls
+    ) {
+        return new AgentResponse(
+                "Confirmation required before executing %s.".formatted(pendingAction.actionName()),
+                ResponseStatus.CONFIRMATION_REQUIRED,
+                pendingAction.toPendingConfirmation(),
+                AgentStructuredOutput.empty(),
+                new ExecutionTrace(
+                        "run-" + UUID.randomUUID(),
+                        request.threadId(),
+                        request.userId(),
+                        toolCalls,
+                        true,
+                        pendingAction.confirmationId(),
+                        ResponseStatus.CONFIRMATION_REQUIRED
+                )
+        );
+    }
+
+    private ToolCallTrace toolTrace(PendingAction pendingAction, String status) {
+        return new ToolCallTrace(pendingAction.actionName(), status, pendingAction.toolCallId());
     }
 
     private java.util.Optional<AiMessage> lastAiMessage(SupportTriageState state) {
@@ -207,5 +333,46 @@ public class SupportTriageGraph {
             }
         }
         return java.util.Optional.empty();
+    }
+
+    private List<ChatMessage> messagesForAgentCall(SupportTriageState state) {
+        List<ChatMessage> existingMessages = state.messages();
+        if (lastAiMessage(state).filter(AiMessage::hasToolExecutionRequests).isPresent()) {
+            return existingMessages;
+        }
+        return appendUserMessage(existingMessages, state.request().message());
+    }
+
+    private List<ChatMessage> appendUserMessage(List<ChatMessage> existingMessages, String userMessage) {
+        List<ChatMessage> messages = new ArrayList<>();
+        if (existingMessages.isEmpty()) {
+            messages.add(SystemMessage.from(SupportPrompts.STATIC_SYSTEM_PROMPT));
+        } else {
+            messages.addAll(existingMessages);
+        }
+        messages.add(UserMessage.from(userMessage));
+        return List.copyOf(messages);
+    }
+
+    private List<ChatMessage> append(List<ChatMessage> messages, AiMessage aiMessage) {
+        List<ChatMessage> updatedMessages = new ArrayList<>(messages);
+        updatedMessages.add(aiMessage);
+        return List.copyOf(updatedMessages);
+    }
+
+    private String memoryId(AgentRequest request) {
+        return ThreadConversationId.from(request.threadId(), request.userId());
+    }
+
+    private String conversation(List<ChatMessage> messages) {
+        StringBuilder conversation = new StringBuilder();
+        for (ChatMessage message : messages) {
+            if (message instanceof UserMessage userMessage) {
+                conversation.append("User:\n").append(userMessage.singleText()).append("\n\n");
+            } else if (message instanceof AiMessage aiMessage && !aiMessage.hasToolExecutionRequests()) {
+                conversation.append("Assistant:\n").append(aiMessage.text()).append("\n\n");
+            }
+        }
+        return conversation.toString().strip();
     }
 }
