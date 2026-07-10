@@ -36,8 +36,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
         "spring.autoconfigure.exclude=dev.langchain4j.spring.LangChain4jAutoConfiguration,"
                 + "dev.langchain4j.openai.spring.OpenAiAutoConfiguration",
         "spring.main.allow-bean-definition-overriding=true",
-        "agent.tools.backend=local",
-        "agent.assistant.enabled=false"
+        "agent.tools.backend=local"
 })
 @AutoConfigureMockMvc
 class AgentControllerHappyPathTests {
