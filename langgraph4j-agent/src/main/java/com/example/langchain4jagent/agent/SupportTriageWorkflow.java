@@ -17,6 +17,7 @@ import org.bsc.langgraph4j.action.AsyncEdgeAction;
 import org.bsc.langgraph4j.action.NodeAction;
 import org.bsc.langgraph4j.state.AgentState;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
 
 import java.util.List;
@@ -29,6 +30,7 @@ import static org.bsc.langgraph4j.StateGraph.START;
 import static org.bsc.langgraph4j.action.AsyncNodeAction.node_async;
 
 @Component
+@ConditionalOnProperty(name = "agent.workflow.enabled", havingValue = "true")
 public class SupportTriageWorkflow {
 
     private static final String DISPATCH = "dispatch";

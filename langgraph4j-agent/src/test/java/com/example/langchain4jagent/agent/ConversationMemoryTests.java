@@ -1,14 +1,16 @@
 package com.example.langchain4jagent.agent;
 
 import com.example.langchain4jagent.agent.dto.AgentRequest;
+import com.example.langchain4jagent.tools.AgentToolRegistry;
+import com.example.langchain4jagent.tools.LocalSupportReadTools;
+import com.example.langchain4jagent.tools.LocalSupportToolStore;
+import com.example.langchain4jagent.tools.LocalSupportWriteTools;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import dev.langchain4j.data.message.AiMessage;
 import dev.langchain4j.data.message.UserMessage;
-import dev.langchain4j.memory.chat.MessageWindowChatMemory;
 import dev.langchain4j.model.chat.ChatModel;
 import dev.langchain4j.model.chat.request.ChatRequest;
 import dev.langchain4j.model.chat.response.ChatResponse;
-import dev.langchain4j.service.AiServices;
-import dev.langchain4j.store.memory.chat.InMemoryChatMemoryStore;
 import org.junit.jupiter.api.Test;
 
 import java.util.ArrayList;
@@ -59,16 +61,13 @@ class ConversationMemoryTests {
     }
 
     private static SupportTriageService newService(RecordingChatModel model) {
-        InMemoryChatMemoryStore store = new InMemoryChatMemoryStore();
-        SupportTriageAssistant assistant = AiServices.builder(SupportTriageAssistant.class)
-                .chatModel(model)
-                .chatMemoryProvider(memoryId -> MessageWindowChatMemory.builder()
-                        .id(memoryId)
-                        .maxMessages(20)
-                        .chatMemoryStore(store)
-                        .build())
-                .build();
-        return new SupportTriageService(assistant);
+        LocalSupportToolStore store = new LocalSupportToolStore();
+        AgentToolRegistry registry = new AgentToolRegistry(
+                new LocalSupportReadTools(store),
+                new LocalSupportWriteTools(store),
+                new ObjectMapper()
+        );
+        return new SupportTriageService(new SupportTriageGraph(model, registry));
     }
 
     private static AgentRequest messageTurn(String threadId, String userId, String message) {

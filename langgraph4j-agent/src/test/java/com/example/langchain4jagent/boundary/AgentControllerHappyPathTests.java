@@ -1,18 +1,18 @@
 package com.example.langchain4jagent.boundary;
 
 import com.example.langchain4jagent.agent.DiagnosticSummaryExtractor;
-import com.example.langchain4jagent.agent.SupportTriageAssistant;
 import com.example.langchain4jagent.agent.dto.DiagnosticSummary;
 import com.example.langchain4jagent.tools.LocalSupportToolStore;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import dev.langchain4j.agent.tool.ToolExecutionRequest;
-import dev.langchain4j.data.message.UserMessage;
-import dev.langchain4j.service.tool.ToolProvider;
-import dev.langchain4j.service.tool.ToolProviderRequest;
+import dev.langchain4j.data.message.AiMessage;
+import dev.langchain4j.data.message.ToolExecutionResultMessage;
+import dev.langchain4j.model.chat.ChatModel;
+import dev.langchain4j.model.chat.request.ChatRequest;
+import dev.langchain4j.model.chat.response.ChatResponse;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
@@ -33,7 +33,9 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 @SpringBootTest(properties = {
-        "spring.autoconfigure.exclude=dev.langchain4j.spring.LangChain4jAutoConfiguration",
+        "spring.autoconfigure.exclude=dev.langchain4j.spring.LangChain4jAutoConfiguration,"
+                + "dev.langchain4j.openai.spring.OpenAiAutoConfiguration",
+        "spring.main.allow-bean-definition-overriding=true",
         "agent.tools.backend=local",
         "agent.assistant.enabled=false"
 })
@@ -106,8 +108,8 @@ class AgentControllerHappyPathTests {
         assertThat(toolStore.createdTickets()).hasSize(initialTicketCount + 1);
         String createdTicketId = (String) toolStore.createdTickets().get(initialTicketCount).get("id");
         assertThat(secondTurn.path("message").asText()).contains(createdTicketId);
-        assertThat(secondTurn.at("/trace/tool_calls/0/status").asText())
-                .isIn("success", "approved_executed");
+        assertThat(secondTurn.at("/trace/tool_calls/0/status").asText()).isEqualTo("confirmation_required");
+        assertThat(secondTurn.at("/trace/tool_calls/1/status").asText()).isEqualTo("tools_executed");
     }
 
     private JsonResultActions postJson(String json) throws Exception {
@@ -138,13 +140,10 @@ class AgentControllerHappyPathTests {
     @TestConfiguration
     static class TestConfig {
 
-        @Bean
+        @Bean("openAiChatModel")
         @Primary
-        SupportTriageAssistant scriptedToolCallingAssistant(
-                @Qualifier("agentToolProvider") ToolProvider toolProvider,
-                ObjectMapper objectMapper
-        ) {
-            return new ScriptedToolCallingAssistant(toolProvider, objectMapper);
+        ScriptedToolCallingModel scriptedToolCallingModel(ObjectMapper objectMapper) {
+            return new ScriptedToolCallingModel(objectMapper);
         }
 
         @Bean
@@ -159,31 +158,33 @@ class AgentControllerHappyPathTests {
         }
     }
 
-    private static final class ScriptedToolCallingAssistant implements SupportTriageAssistant {
+    private static final class ScriptedToolCallingModel implements ChatModel {
 
-        private final ToolProvider toolProvider;
         private final ObjectMapper objectMapper;
 
-        private ScriptedToolCallingAssistant(ToolProvider toolProvider, ObjectMapper objectMapper) {
-            this.toolProvider = toolProvider;
+        private ScriptedToolCallingModel(ObjectMapper objectMapper) {
             this.objectMapper = objectMapper;
         }
 
         @Override
-        public String chat(String memoryId, String userMessage) {
-            if (userMessage.contains("Tool result:")) {
-                return "Created incident ticket " + ticketIdFrom(userMessage) + ".";
-            }
+        public ChatResponse doChat(ChatRequest chatRequest) {
+            return ChatResponse.builder()
+                    .aiMessage(lastToolResult(chatRequest) == null
+                            ? AiMessage.from(List.of(ToolExecutionRequest.builder()
+                                    .id("tool-call-create-ticket")
+                                    .name("create_incident_ticket")
+                                    .arguments(ticketArguments())
+                                    .build()))
+                            : AiMessage.from("Created incident ticket " + ticketIdFrom(lastToolResult(chatRequest)) + "."))
+                    .build();
+        }
 
-            var tools = toolProvider.provideTools(new ToolProviderRequest(memoryId, UserMessage.from(userMessage)));
-            return tools.toolExecutorByName("create_incident_ticket").execute(
-                    ToolExecutionRequest.builder()
-                            .id("tool-call-create-ticket")
-                            .name("create_incident_ticket")
-                            .arguments(ticketArguments())
-                            .build(),
-                    memoryId
-            );
+        private ToolExecutionResultMessage lastToolResult(ChatRequest chatRequest) {
+            return chatRequest.messages().stream()
+                    .filter(ToolExecutionResultMessage.class::isInstance)
+                    .map(ToolExecutionResultMessage.class::cast)
+                    .reduce((first, second) -> second)
+                    .orElse(null);
         }
 
         private String ticketArguments() {
@@ -199,20 +200,20 @@ class AgentControllerHappyPathTests {
             }
         }
 
-        private String ticketIdFrom(String userMessage) {
-            int index = userMessage.indexOf("INC-FAKE-");
+        private String ticketIdFrom(ToolExecutionResultMessage toolResult) {
+            int index = toolResult.text().indexOf("INC-FAKE-");
             if (index < 0) {
                 return "INC-FAKE-unknown";
             }
             int end = index;
-            while (end < userMessage.length()) {
-                char current = userMessage.charAt(end);
+            while (end < toolResult.text().length()) {
+                char current = toolResult.text().charAt(end);
                 if (!Character.isLetterOrDigit(current) && current != '-') {
                     break;
                 }
                 end++;
             }
-            return userMessage.substring(index, end);
+            return toolResult.text().substring(index, end);
         }
     }
 }

@@ -1,11 +1,16 @@
 package com.example.langchain4jagent.boundary;
 
 import com.example.langchain4jagent.agent.DiagnosticSummaryExtractor;
-import com.example.langchain4jagent.agent.SupportTriageAssistant;
 import com.example.langchain4jagent.agent.dto.DiagnosticSummary;
+import dev.langchain4j.data.message.AiMessage;
+import dev.langchain4j.data.message.UserMessage;
+import dev.langchain4j.model.chat.ChatModel;
+import dev.langchain4j.model.chat.request.ChatRequest;
+import dev.langchain4j.model.chat.response.ChatResponse;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
@@ -26,7 +31,9 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 @SpringBootTest(properties = {
-        "spring.autoconfigure.exclude=dev.langchain4j.spring.LangChain4jAutoConfiguration",
+        "spring.autoconfigure.exclude=dev.langchain4j.spring.LangChain4jAutoConfiguration,"
+                + "dev.langchain4j.openai.spring.OpenAiAutoConfiguration",
+        "spring.main.allow-bean-definition-overriding=true",
         "agent.tools.backend=local",
         "agent.assistant.enabled=false"
 })
@@ -37,19 +44,20 @@ class AgentControllerSystemTests {
     private MockMvc mockMvc;
 
     @Autowired
-    private RecordingSupportTriageAssistant assistant;
+    @Qualifier("openAiChatModel")
+    private ChatModel chatModel;
 
     @Autowired
     private RecordingDiagnosticSummaryExtractor diagnosticSummaryExtractor;
 
     @BeforeEach
-    void resetAssistant() {
-        assistant.reset();
+    void reset() {
+        recordingChatModel().reset();
         diagnosticSummaryExtractor.reset();
     }
 
     @Test
-    void messageTurnReturnsCompletedResponseFromAssistant() throws Exception {
+    void messageTurnReturnsCompletedResponseFromGraph() throws Exception {
         mockMvc.perform(post("/api/agent/turns")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
@@ -76,7 +84,7 @@ class AgentControllerSystemTests {
                 .andExpect(jsonPath("$.trace.pending_confirmation_id").value(nullValue()))
                 .andExpect(jsonPath("$.trace.final_status").value("COMPLETED"));
 
-        assertThat(assistant.messages()).containsExactly("Disk is full");
+        assertThat(recordingChatModel().userMessages()).containsExactly("Disk is full");
         assertThat(diagnosticSummaryExtractor.conversations())
                 .singleElement()
                 .satisfies(conversation -> assertThat(conversation)
@@ -87,7 +95,7 @@ class AgentControllerSystemTests {
     }
 
     @Test
-    void emptyMessageTurnReturnsBusinessErrorWithoutCallingAssistant() throws Exception {
+    void emptyMessageTurnReturnsBusinessErrorWithoutCallingModel() throws Exception {
         mockMvc.perform(post("/api/agent/turns")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
@@ -109,11 +117,11 @@ class AgentControllerSystemTests {
                 .andExpect(jsonPath("$.trace.confirmation_required").value(false))
                 .andExpect(jsonPath("$.trace.final_status").value("ERROR"));
 
-        assertThat(assistant.messages()).isEmpty();
+        assertThat(recordingChatModel().userMessages()).isEmpty();
     }
 
     @Test
-    void decisionTurnWithUnknownConfirmationReturnsErrorWithoutCallingAssistant() throws Exception {
+    void decisionTurnWithUnknownConfirmationReturnsErrorWithoutCallingModel() throws Exception {
         mockMvc.perform(post("/api/agent/turns")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
@@ -125,7 +133,7 @@ class AgentControllerSystemTests {
                                     "type": "APPROVE"
                                   }
                                 }
-                """))
+                                """))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.message").value("Pending confirmation was not found."))
                 .andExpect(jsonPath("$.status").value("ERROR"))
@@ -136,7 +144,11 @@ class AgentControllerSystemTests {
                 .andExpect(jsonPath("$.trace.confirmation_required").value(false))
                 .andExpect(jsonPath("$.trace.final_status").value("ERROR"));
 
-        assertThat(assistant.messages()).isEmpty();
+        assertThat(recordingChatModel().userMessages()).isEmpty();
+    }
+
+    private RecordingChatModel recordingChatModel() {
+        return (RecordingChatModel) chatModel;
     }
 
     @Test
@@ -195,9 +207,10 @@ class AgentControllerSystemTests {
     @TestConfiguration
     static class TestConfig {
 
-        @Bean
-        RecordingSupportTriageAssistant supportTriageAssistant() {
-            return new RecordingSupportTriageAssistant();
+        @Bean("openAiChatModel")
+        @Primary
+        RecordingChatModel openAiChatModel() {
+            return new RecordingChatModel();
         }
 
         @Bean
@@ -231,22 +244,30 @@ class AgentControllerSystemTests {
         }
     }
 
-    static final class RecordingSupportTriageAssistant implements SupportTriageAssistant {
+    static final class RecordingChatModel implements ChatModel {
 
-        private final List<String> messages = new ArrayList<>();
+        private final List<String> userMessages = new ArrayList<>();
 
         @Override
-        public String chat(String memoryId, String userMessage) {
-            messages.add(userMessage);
-            return "triage: " + userMessage;
+        public ChatResponse doChat(ChatRequest chatRequest) {
+            String lastUserMessage = chatRequest.messages().stream()
+                    .filter(UserMessage.class::isInstance)
+                    .map(UserMessage.class::cast)
+                    .reduce((first, second) -> second)
+                    .map(UserMessage::singleText)
+                    .orElse("");
+            userMessages.add(lastUserMessage);
+            return ChatResponse.builder()
+                    .aiMessage(AiMessage.from("triage: " + lastUserMessage))
+                    .build();
         }
 
         void reset() {
-            messages.clear();
+            userMessages.clear();
         }
 
-        List<String> messages() {
-            return List.copyOf(messages);
+        List<String> userMessages() {
+            return List.copyOf(userMessages);
         }
     }
 }

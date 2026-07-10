@@ -111,12 +111,18 @@ public class SupportTriageGraph {
     }
 
     public AgentResponse run(AgentRequest request) {
+        if (request == null || (request.decision() == null && (request.message() == null || request.message().isBlank()))) {
+            return response("Message is required for message turns.", ResponseStatus.ERROR, request);
+        }
         SupportTriageState finalState = graph.invoke(
                         Map.of(REQUEST, request),
                         runnableConfig(request)
                 )
                 .orElseThrow(() -> new IllegalStateException("Support triage graph did not produce a final state."));
-        return finalState.response();
+        AgentResponse response = finalState.response();
+        return response == null
+                ? response("Message is required for message turns.", ResponseStatus.ERROR, request)
+                : response;
     }
 
     CompiledGraph<SupportTriageState> compiledGraph() {
