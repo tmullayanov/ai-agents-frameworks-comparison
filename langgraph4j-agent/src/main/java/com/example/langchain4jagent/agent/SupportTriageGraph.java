@@ -4,6 +4,7 @@ import com.example.langchain4jagent.agent.dto.AgentRequest;
 import com.example.langchain4jagent.agent.dto.AgentResponse;
 import com.example.langchain4jagent.agent.dto.AgentStructuredOutput;
 import com.example.langchain4jagent.agent.dto.ConfirmationDecisionType;
+import com.example.langchain4jagent.agent.dto.DiagnosticSummary;
 import com.example.langchain4jagent.agent.dto.ExecutionTrace;
 import com.example.langchain4jagent.agent.dto.ResponseStatus;
 import com.example.langchain4jagent.agent.dto.ToolCallTrace;
@@ -59,16 +60,36 @@ public class SupportTriageGraph {
     private final ChatModel chatModel;
     private final AgentToolRegistry toolRegistry;
     private final ToolPolicy toolPolicy;
+    private final DiagnosticSummaryExtractor diagnosticSummaryExtractor;
     private final CompiledGraph<SupportTriageState> graph;
+    private final System.Logger logger = System.getLogger(SupportTriageGraph.class.getName());
 
     public SupportTriageGraph(ChatModel chatModel, AgentToolRegistry toolRegistry) {
         this(chatModel, toolRegistry, new ToolPolicy());
     }
 
     public SupportTriageGraph(ChatModel chatModel, AgentToolRegistry toolRegistry, ToolPolicy toolPolicy) {
+        this(chatModel, toolRegistry, toolPolicy, (conversation, finalAnswer) -> null);
+    }
+
+    public SupportTriageGraph(
+            ChatModel chatModel,
+            AgentToolRegistry toolRegistry,
+            DiagnosticSummaryExtractor diagnosticSummaryExtractor
+    ) {
+        this(chatModel, toolRegistry, new ToolPolicy(), diagnosticSummaryExtractor);
+    }
+
+    public SupportTriageGraph(
+            ChatModel chatModel,
+            AgentToolRegistry toolRegistry,
+            ToolPolicy toolPolicy,
+            DiagnosticSummaryExtractor diagnosticSummaryExtractor
+    ) {
         this.chatModel = chatModel;
         this.toolRegistry = toolRegistry;
         this.toolPolicy = toolPolicy;
+        this.diagnosticSummaryExtractor = diagnosticSummaryExtractor;
         this.graph = compileGraph();
     }
 
@@ -85,6 +106,7 @@ public class SupportTriageGraph {
         this.chatModel = chatModel;
         this.toolRegistry = toolRegistry;
         this.toolPolicy = toolPolicy;
+        this.diagnosticSummaryExtractor = (conversation, finalAnswer) -> null;
         this.graph = graph;
     }
 
@@ -125,7 +147,10 @@ public class SupportTriageGraph {
                             AGENT, AGENT,
                             END, END
                     ))
-                    .addEdge(EXECUTE_APPROVED_TOOL, AGENT)
+                    .addConditionalEdges(EXECUTE_APPROVED_TOOL, routeAfterApprovedTool(), Map.of(
+                            AGENT, AGENT,
+                            END, END
+                    ))
                     .addEdge(SUMMARIZE, END)
                     .addEdge(REJECT, END)
                     .compile(CompileConfig.builder()
@@ -176,6 +201,16 @@ public class SupportTriageGraph {
                 return CompletableFuture.completedFuture(AGENT);
             }
             return CompletableFuture.completedFuture(END);
+        };
+    }
+
+    private AsyncEdgeAction<SupportTriageState> routeAfterApprovedTool() {
+        return state -> {
+            AgentResponse response = state.response();
+            if (response != null && response.status() == ResponseStatus.ERROR) {
+                return CompletableFuture.completedFuture(END);
+            }
+            return CompletableFuture.completedFuture(AGENT);
         };
     }
 
@@ -250,23 +285,91 @@ public class SupportTriageGraph {
     }
 
     private Map<String, Object> executeApprovedTool(SupportTriageState state) {
-        return Map.of(RESPONSE, response(
-                "LangGraph4j approved tool execution is not implemented yet.",
-                ResponseStatus.ERROR,
-                state.request()
-        ));
+        AgentRequest request = state.request();
+        PendingAction pendingAction = validatedPendingAction(state);
+        ToolExecutionRequest pendingToolCall = state.pendingToolCall();
+        if (pendingAction == null || pendingToolCall == null) {
+            return Map.of(RESPONSE, response(
+                    "Pending confirmation was not found.",
+                    ResponseStatus.ERROR,
+                    request,
+                    state.toolCalls()
+            ));
+        }
+
+        String result = toolRegistry.execute(pendingToolCall, pendingAction.memoryId());
+
+        List<ChatMessage> updatedMessages = new ArrayList<>(state.messages());
+        updatedMessages.add(ToolExecutionResultMessage.from(pendingToolCall, result));
+
+        List<ToolCallTrace> traces = new ArrayList<>(state.toolCalls());
+        traces.add(toolTrace(pendingAction, TOOLS_EXECUTED));
+
+        Map<String, Object> update = new java.util.HashMap<>();
+        update.put(MESSAGES, SupportTriageState.storeMessages(updatedMessages));
+        update.put(CONVERSATION, conversation(updatedMessages));
+        update.put(TOOL_CALLS, List.copyOf(traces));
+        update.put(PENDING_ACTION, null);
+        update.put(PENDING_TOOL_CALL, null);
+        update.put(RESPONSE, response("", ResponseStatus.COMPLETED, request, traces));
+        return update;
     }
 
     private Map<String, Object> summarize(SupportTriageState state) {
-        return Map.of();
+        AgentResponse current = state.response();
+        DiagnosticSummary diagnosticSummary = null;
+        try {
+            diagnosticSummary = diagnosticSummaryExtractor.extract(state.conversation(), current.message());
+        } catch (RuntimeException exception) {
+            logger.log(System.Logger.Level.WARNING, "Diagnostic summary extraction failed.", exception);
+        }
+        return Map.of(RESPONSE, withDiagnosticSummary(current, diagnosticSummary));
     }
 
     private Map<String, Object> reject(SupportTriageState state) {
-        return Map.of(RESPONSE, response(
+        AgentRequest request = state.request();
+        PendingAction pendingAction = validatedPendingAction(state);
+        if (pendingAction == null || state.pendingToolCall() == null) {
+            return Map.of(RESPONSE, response(
+                    "Pending confirmation was not found.",
+                    ResponseStatus.ERROR,
+                    request,
+                    state.toolCalls()
+            ));
+        }
+
+        List<ToolCallTrace> traces = new ArrayList<>(state.toolCalls());
+        traces.add(toolTrace(pendingAction, "rejected"));
+
+        Map<String, Object> update = new java.util.HashMap<>();
+        update.put(PENDING_ACTION, null);
+        update.put(PENDING_TOOL_CALL, null);
+        update.put(TOOL_CALLS, List.copyOf(traces));
+        update.put(RESPONSE, response(
                 "Confirmation rejected. No side effect was executed.",
                 ResponseStatus.REJECTED,
-                state.request()
+                request,
+                traces
         ));
+        return update;
+    }
+
+    private PendingAction validatedPendingAction(SupportTriageState state) {
+        AgentRequest request = state.request();
+        PendingAction pendingAction = state.pendingAction();
+        if (request == null || request.decision() == null || pendingAction == null) {
+            return null;
+        }
+        if (!pendingAction.confirmationId().equals(request.decision().confirmationId())) {
+            return null;
+        }
+        if (!pendingAction.threadId().equals(request.threadId())) {
+            return null;
+        }
+        if (!pendingAction.userId().equals(request.userId())) {
+            return null;
+        }
+        return pendingAction;
     }
 
     private AgentResponse response(String message, ResponseStatus status, AgentRequest request) {
@@ -317,6 +420,16 @@ public class SupportTriageGraph {
                         pendingAction.confirmationId(),
                         ResponseStatus.CONFIRMATION_REQUIRED
                 )
+        );
+    }
+
+    private AgentResponse withDiagnosticSummary(AgentResponse response, DiagnosticSummary diagnosticSummary) {
+        return new AgentResponse(
+                response.message(),
+                response.status(),
+                response.pendingConfirmation(),
+                new AgentStructuredOutput(diagnosticSummary, response.structuredOutput().proposedTicket()),
+                response.trace()
         );
     }
 

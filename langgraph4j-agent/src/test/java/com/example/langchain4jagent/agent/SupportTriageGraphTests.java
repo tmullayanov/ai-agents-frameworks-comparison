@@ -1,6 +1,9 @@
 package com.example.langchain4jagent.agent;
 
 import com.example.langchain4jagent.agent.dto.AgentRequest;
+import com.example.langchain4jagent.agent.dto.ConfirmationDecision;
+import com.example.langchain4jagent.agent.dto.ConfirmationDecisionType;
+import com.example.langchain4jagent.agent.dto.DiagnosticSummary;
 import com.example.langchain4jagent.agent.dto.ResponseStatus;
 import com.example.langchain4jagent.tools.AgentToolRegistry;
 import com.example.langchain4jagent.tools.LocalSupportReadTools;
@@ -41,6 +44,29 @@ class SupportTriageGraphTests {
         assertThat(response.trace().threadId()).isEqualTo("thread-1");
         assertThat(response.trace().userId()).isEqualTo("user-1");
         assertThat(response.trace().finalStatus()).isEqualTo(ResponseStatus.COMPLETED);
+    }
+
+    @Test
+    void completedMessageTurnReturnsDiagnosticSummary() {
+        RecordingChatModel model = new RecordingChatModel("billing-api diagnosis is ready");
+        RecordingDiagnosticSummaryExtractor extractor = new RecordingDiagnosticSummaryExtractor(summary());
+        SupportTriageGraph graph = graph(model, extractor);
+
+        var response = graph.run(messageTurn("thread-1", "user-1", "Investigate billing-api"));
+
+        assertThat(response.status()).isEqualTo(ResponseStatus.COMPLETED);
+        assertThat(response.message()).isEqualTo("billing-api diagnosis is ready");
+        assertThat(response.pendingConfirmation()).isNull();
+        assertThat(response.structuredOutput().diagnosticSummary()).isEqualTo(summary());
+        assertThat(response.trace().finalStatus()).isEqualTo(ResponseStatus.COMPLETED);
+        assertThat(extractor.conversations()).containsExactly("""
+                User:
+                Investigate billing-api
+
+                Assistant:
+                billing-api diagnosis is ready
+                """.strip());
+        assertThat(extractor.finalAnswers()).containsExactly("billing-api diagnosis is ready");
     }
 
     @Test
@@ -164,26 +190,32 @@ class SupportTriageGraphTests {
                 "restart_everything",
                 "{}"
         ))));
-        SupportTriageGraph graph = graph(model);
+        RecordingDiagnosticSummaryExtractor extractor = new RecordingDiagnosticSummaryExtractor(summary());
+        SupportTriageGraph graph = graph(model, extractor);
 
         var response = graph.run(messageTurn("thread-1", "user-1", "Use the mystery tool"));
 
         assertThat(response.status()).isEqualTo(ResponseStatus.ERROR);
         assertThat(response.message()).contains("Unknown tool requested: restart_everything");
+        assertThat(response.structuredOutput().diagnosticSummary()).isNull();
+        assertThat(extractor.conversations()).isEmpty();
         assertThat(model.requestCount()).isEqualTo(1);
     }
 
     @Test
     void protectedToolRequiresConfirmationAndDoesNotExecuteSideEffect() {
         RecordingChatModel model = new RecordingChatModel(AiMessage.from(List.of(createIncidentTicketCall())));
-        GraphFixture fixture = graphWithStore(model);
+        RecordingDiagnosticSummaryExtractor extractor = new RecordingDiagnosticSummaryExtractor(summary());
+        GraphFixture fixture = graphWithStore(model, extractor);
 
         var response = fixture.graph().run(messageTurn("thread-1", "user-1", "Create an incident"));
 
         assertThat(response.status()).isEqualTo(ResponseStatus.CONFIRMATION_REQUIRED);
         assertThat(response.pendingConfirmation()).isNotNull();
         assertThat(response.pendingConfirmation().actionName()).isEqualTo("create_incident_ticket");
+        assertThat(response.structuredOutput().diagnosticSummary()).isNull();
         assertThat(fixture.store().createdTickets()).isEmpty();
+        assertThat(extractor.conversations()).isEmpty();
         assertThat(model.requestCount()).isEqualTo(1);
     }
 
@@ -212,6 +244,180 @@ class SupportTriageGraphTests {
                     assertThat(trace.status()).isEqualTo("confirmation_required");
                     assertThat(trace.toolCallId()).isEqualTo("tool-call-ticket");
                 });
+    }
+
+    @Test
+    void approveExecutesSavedProtectedToolCallAndReturnsFinalModelAnswer() {
+        RecordingChatModel model = new RecordingChatModel(
+                AiMessage.from(List.of(createIncidentTicketCall())),
+                AiMessage.from("Created incident ticket for the Billing API timeout spike.")
+        );
+        RecordingDiagnosticSummaryExtractor extractor = new RecordingDiagnosticSummaryExtractor(summary());
+        GraphFixture fixture = graphWithStore(model, extractor);
+
+        var confirmation = fixture.graph().run(messageTurn("thread-1", "user-1", "Create an incident"));
+        var response = fixture.graph().run(approveTurn(
+                "thread-1",
+                "user-1",
+                confirmation.pendingConfirmation().confirmationId()
+        ));
+
+        assertThat(response.status()).isEqualTo(ResponseStatus.COMPLETED);
+        assertThat(response.message()).isEqualTo("Created incident ticket for the Billing API timeout spike.");
+        assertThat(response.pendingConfirmation()).isNull();
+        assertThat(response.structuredOutput().diagnosticSummary()).isEqualTo(summary());
+        assertThat(fixture.store().createdTickets()).hasSize(1);
+        assertThat(fixture.store().createdTickets().get(0))
+                .containsEntry("title", "Billing API timeout spike")
+                .containsEntry("severity", "SEV-2");
+        assertThat(model.requestCount()).isEqualTo(2);
+        assertThat(extractor.finalAnswers())
+                .containsExactly("Created incident ticket for the Billing API timeout spike.");
+        assertThat(extractor.conversations()).singleElement().asString()
+                .contains("User:\nCreate an incident")
+                .contains("Assistant:\nCreated incident ticket for the Billing API timeout spike.");
+
+        List<ToolExecutionResultMessage> toolResults = toolResults(model.request(1));
+        assertThat(toolResults).hasSize(1);
+        assertThat(toolResults.get(0).id()).isEqualTo("tool-call-ticket");
+        assertThat(toolResults.get(0).toolName()).isEqualTo("create_incident_ticket");
+        assertThat(toolResults.get(0).text()).contains("Billing API timeout spike");
+        assertThat(response.trace().toolCalls())
+                .extracting(trace -> trace.name() + ":" + trace.status() + ":" + trace.toolCallId())
+                .contains(
+                        "create_incident_ticket:confirmation_required:tool-call-ticket",
+                        "create_incident_ticket:tools_executed:tool-call-ticket"
+                );
+    }
+
+    @Test
+    void rejectDoesNotExecuteProtectedToolCallAndDoesNotCallModelAgain() {
+        RecordingChatModel model = new RecordingChatModel(AiMessage.from(List.of(createIncidentTicketCall())));
+        RecordingDiagnosticSummaryExtractor extractor = new RecordingDiagnosticSummaryExtractor(summary());
+        GraphFixture fixture = graphWithStore(model, extractor);
+
+        var confirmation = fixture.graph().run(messageTurn("thread-1", "user-1", "Create an incident"));
+        var response = fixture.graph().run(rejectTurn(
+                "thread-1",
+                "user-1",
+                confirmation.pendingConfirmation().confirmationId()
+        ));
+
+        assertThat(response.status()).isEqualTo(ResponseStatus.REJECTED);
+        assertThat(response.message()).isEqualTo("Confirmation rejected. No side effect was executed.");
+        assertThat(response.pendingConfirmation()).isNull();
+        assertThat(response.structuredOutput().diagnosticSummary()).isNull();
+        assertThat(fixture.store().createdTickets()).isEmpty();
+        assertThat(extractor.conversations()).isEmpty();
+        assertThat(model.requestCount()).isEqualTo(1);
+        assertThat(response.trace().toolCalls())
+                .extracting(trace -> trace.name() + ":" + trace.status() + ":" + trace.toolCallId())
+                .contains(
+                        "create_incident_ticket:confirmation_required:tool-call-ticket",
+                        "create_incident_ticket:rejected:tool-call-ticket"
+                );
+    }
+
+    @Test
+    void extractorExceptionDoesNotBreakCompletedResponseOrChangeSideEffects() {
+        RecordingChatModel model = new RecordingChatModel(
+                AiMessage.from(List.of(createIncidentTicketCall())),
+                AiMessage.from("Created incident ticket for the Billing API timeout spike.")
+        );
+        RecordingDiagnosticSummaryExtractor extractor = new RecordingDiagnosticSummaryExtractor(
+                new IllegalStateException("summary service unavailable")
+        );
+        GraphFixture fixture = graphWithStore(model, extractor);
+
+        var confirmation = fixture.graph().run(messageTurn("thread-1", "user-1", "Create an incident"));
+        var response = fixture.graph().run(approveTurn(
+                "thread-1",
+                "user-1",
+                confirmation.pendingConfirmation().confirmationId()
+        ));
+
+        assertThat(response.status()).isEqualTo(ResponseStatus.COMPLETED);
+        assertThat(response.message()).isEqualTo("Created incident ticket for the Billing API timeout spike.");
+        assertThat(response.pendingConfirmation()).isNull();
+        assertThat(response.structuredOutput().diagnosticSummary()).isNull();
+        assertThat(fixture.store().createdTickets()).hasSize(1);
+        assertThat(response.trace().toolCalls())
+                .extracting(trace -> trace.name() + ":" + trace.status() + ":" + trace.toolCallId())
+                .contains(
+                        "create_incident_ticket:confirmation_required:tool-call-ticket",
+                        "create_incident_ticket:tools_executed:tool-call-ticket"
+                );
+        assertThat(response.trace().finalStatus()).isEqualTo(ResponseStatus.COMPLETED);
+        assertThat(extractor.finalAnswers())
+                .containsExactly("Created incident ticket for the Billing API timeout spike.");
+    }
+
+    @Test
+    void approveWithWrongConfirmationIdReturnsErrorWithoutSideEffectOrModelCall() {
+        RecordingChatModel model = new RecordingChatModel(AiMessage.from(List.of(createIncidentTicketCall())));
+        GraphFixture fixture = graphWithStore(model);
+
+        fixture.graph().run(messageTurn("thread-1", "user-1", "Create an incident"));
+        var response = fixture.graph().run(approveTurn("thread-1", "user-1", "confirmation-wrong"));
+
+        assertThat(response.status()).isEqualTo(ResponseStatus.ERROR);
+        assertThat(response.message()).isEqualTo("Pending confirmation was not found.");
+        assertThat(fixture.store().createdTickets()).isEmpty();
+        assertThat(model.requestCount()).isEqualTo(1);
+    }
+
+    @Test
+    void rejectWithWrongUserReturnsErrorWithoutSideEffectOrModelCall() {
+        RecordingChatModel model = new RecordingChatModel(AiMessage.from(List.of(createIncidentTicketCall())));
+        GraphFixture fixture = graphWithStore(model);
+
+        var confirmation = fixture.graph().run(messageTurn("thread-1", "user-1", "Create an incident"));
+        var response = fixture.graph().run(rejectTurn(
+                "thread-1",
+                "user-2",
+                confirmation.pendingConfirmation().confirmationId()
+        ));
+
+        assertThat(response.status()).isEqualTo(ResponseStatus.ERROR);
+        assertThat(response.message()).isEqualTo("Pending confirmation was not found.");
+        assertThat(fixture.store().createdTickets()).isEmpty();
+        assertThat(model.requestCount()).isEqualTo(1);
+    }
+
+    @Test
+    void approveWithWrongThreadReturnsErrorWithoutSideEffectOrModelCall() {
+        RecordingChatModel model = new RecordingChatModel(AiMessage.from(List.of(createIncidentTicketCall())));
+        GraphFixture fixture = graphWithStore(model);
+
+        var confirmation = fixture.graph().run(messageTurn("thread-1", "user-1", "Create an incident"));
+        var response = fixture.graph().run(approveTurn(
+                "thread-2",
+                "user-1",
+                confirmation.pendingConfirmation().confirmationId()
+        ));
+
+        assertThat(response.status()).isEqualTo(ResponseStatus.ERROR);
+        assertThat(response.message()).isEqualTo("Pending confirmation was not found.");
+        assertThat(fixture.store().createdTickets()).isEmpty();
+        assertThat(model.requestCount()).isEqualTo(1);
+    }
+
+    @Test
+    void repeatedApproveAfterSuccessfulApproveReturnsErrorWithoutDuplicatingSideEffect() {
+        RecordingChatModel model = new RecordingChatModel(
+                AiMessage.from(List.of(createIncidentTicketCall())),
+                AiMessage.from("Created incident ticket for the Billing API timeout spike.")
+        );
+        GraphFixture fixture = graphWithStore(model);
+
+        var confirmation = fixture.graph().run(messageTurn("thread-1", "user-1", "Create an incident"));
+        String confirmationId = confirmation.pendingConfirmation().confirmationId();
+        fixture.graph().run(approveTurn("thread-1", "user-1", confirmationId));
+        var response = fixture.graph().run(approveTurn("thread-1", "user-1", confirmationId));
+
+        assertThat(response.status()).isEqualTo(ResponseStatus.ERROR);
+        assertThat(fixture.store().createdTickets()).hasSize(1);
+        assertThat(model.requestCount()).isEqualTo(2);
     }
 
     @Test
@@ -288,18 +494,49 @@ class SupportTriageGraphTests {
         return graphWithStore(model).graph();
     }
 
+    private static SupportTriageGraph graph(
+            RecordingChatModel model,
+            DiagnosticSummaryExtractor diagnosticSummaryExtractor
+    ) {
+        return graphWithStore(model, diagnosticSummaryExtractor).graph();
+    }
+
     private static GraphFixture graphWithStore(RecordingChatModel model) {
+        return graphWithStore(model, (conversation, finalAnswer) -> null);
+    }
+
+    private static GraphFixture graphWithStore(
+            RecordingChatModel model,
+            DiagnosticSummaryExtractor diagnosticSummaryExtractor
+    ) {
         LocalSupportToolStore store = new LocalSupportToolStore();
         AgentToolRegistry registry = new AgentToolRegistry(
                 new LocalSupportReadTools(store),
                 new LocalSupportWriteTools(store),
                 new ObjectMapper()
         );
-        return new GraphFixture(new SupportTriageGraph(model, registry), store);
+        return new GraphFixture(new SupportTriageGraph(model, registry, diagnosticSummaryExtractor), store);
     }
 
     private static AgentRequest messageTurn(String threadId, String userId, String message) {
         return new AgentRequest(threadId, userId, message, null);
+    }
+
+    private static AgentRequest approveTurn(String threadId, String userId, String confirmationId) {
+        return decisionTurn(threadId, userId, confirmationId, ConfirmationDecisionType.APPROVE);
+    }
+
+    private static AgentRequest rejectTurn(String threadId, String userId, String confirmationId) {
+        return decisionTurn(threadId, userId, confirmationId, ConfirmationDecisionType.REJECT);
+    }
+
+    private static AgentRequest decisionTurn(
+            String threadId,
+            String userId,
+            String confirmationId,
+            ConfirmationDecisionType type
+    ) {
+        return new AgentRequest(threadId, userId, null, new ConfirmationDecision(confirmationId, type));
     }
 
     private static List<String> systemTexts(ChatRequest request) {
@@ -357,7 +594,52 @@ class SupportTriageGraphTests {
         );
     }
 
+    private static DiagnosticSummary summary() {
+        return new DiagnosticSummary(
+                "billing-api",
+                List.of("payment provider timeouts", "incident ticket needed"),
+                "SEV-2",
+                true
+        );
+    }
+
     private record GraphFixture(SupportTriageGraph graph, LocalSupportToolStore store) {
+    }
+
+    private static final class RecordingDiagnosticSummaryExtractor implements DiagnosticSummaryExtractor {
+
+        private final DiagnosticSummary summary;
+        private final RuntimeException exception;
+        private final List<String> conversations = new ArrayList<>();
+        private final List<String> finalAnswers = new ArrayList<>();
+
+        RecordingDiagnosticSummaryExtractor(DiagnosticSummary summary) {
+            this.summary = summary;
+            this.exception = null;
+        }
+
+        RecordingDiagnosticSummaryExtractor(RuntimeException exception) {
+            this.summary = null;
+            this.exception = exception;
+        }
+
+        @Override
+        public DiagnosticSummary extract(String conversation, String finalAnswer) {
+            conversations.add(conversation);
+            finalAnswers.add(finalAnswer);
+            if (exception != null) {
+                throw exception;
+            }
+            return summary;
+        }
+
+        List<String> conversations() {
+            return conversations;
+        }
+
+        List<String> finalAnswers() {
+            return finalAnswers;
+        }
     }
 
     private static final class RecordingChatModel implements ChatModel {
